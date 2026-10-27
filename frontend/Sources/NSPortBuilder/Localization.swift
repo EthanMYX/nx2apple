@@ -66,7 +66,11 @@ enum L10n {
         "dev.noDevices": ("\u{6ca1}\u{6709}\u{4e0e}\u{8fd9}\u{53f0} Mac \u{914d}\u{5bf9}\u{7684} iPhone \u{6216} iPad\u{ff08}\u{9700}\u{8981} Xcode\u{ff09}\u{3002}", "No iPhone or iPad paired with this Mac (needs Xcode)."),
         "dev.refresh": ("\u{5237}\u{65b0}", "Refresh"),
         "dev.team": ("\u{7b7e}\u{540d}\u{56e2}\u{961f}", "Signing team"),
-        "dev.noTeam": ("\u{6ca1}\u{6709}\u{5f00}\u{53d1}\u{8bc1}\u{4e66}\u{3002}\u{5728} Xcode \u{4e2d}\u{767b}\u{5f55} Apple ID\u{ff08}\u{8bbe}\u{7f6e} \u{2192} \u{8d26}\u{6237}\u{ff09}\u{5373}\u{53ef}\u{83b7}\u{5f97}\u{3002}", "No development certificate. Sign in to Xcode with your Apple ID (Settings \u{2192} Accounts) to get one."),
+        "dev.noTeam": ("Xcode 里没有 Apple ID，也没有开发证书。请在 Xcode → 设置 → 账户中登录。",
+                       "No Apple ID in Xcode and no development certificate. Sign in to Xcode → Settings → Accounts."),
+        "dev.teamNoCert": ("这个团队还没有开发证书：第一次安装时 Xcode 会自动创建（Mac 需要联网）。",
+                           "This team has no development certificate yet: Xcode creates it at the first install (the Mac needs to be online)."),
+        "dev.personalTeam": ("个人团队", "Personal team"),
         "dev.note": ("Xcode 会为这台设备签名并直接安装，游戏数据（romfs.img）复制到 App 的“文稿”中，与侧载相同；第一次复制大型游戏需要几分钟。第一次需要在设备上开启开发者模式，并信任开发者（设置 → 通用 → VPN 与设备管理）。", "Xcode signs the game for this device and installs it there, then copies the game data (romfs.img) into the app’s Documents, as for sideloading; the first copy of a large game takes a few minutes. The first time, turn on Developer Mode on the device and trust the developer (Settings → General → VPN & Device Management)."),
         // ---- Saves: a game's save copied between this Mac and the device it is installed on (SaveTransfer.swift) ----
         "saves.menu": ("存档…", "Saves…"),

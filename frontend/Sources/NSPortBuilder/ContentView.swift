@@ -2226,11 +2226,9 @@ struct BuilderView: View {
         let devices = [(value: "", label: m.t("dev.none"))] + m.devices.map { d in
             (value: d.id, label: d.name + (d.reachable ? "" : " (" + m.t("dev.notConnected") + ")"))
         }
-        let teams = m.teams.map { t in
-            (value: t.id, label: t.identity.replacingOccurrences(of: #"^(Apple Development|iPhone Developer): "#, with: "", options: .regularExpression)
-                .replacingOccurrences(of: #" \([A-Z0-9]+\)$"#, with: "", options: .regularExpression) + " · " + t.id)
-        }
-        return group(m.t("dev.section"), footnote: m.installDevice.isEmpty ? "" : m.t("dev.note")) {
+        let teams = m.teams.map { (value: $0.id, label: $0.label(personalTeam: m.t("dev.personalTeam"))) }
+        let needsCertificate = m.teams.first { $0.id == m.signingTeam }.map { !$0.hasCertificate } ?? false
+        return group(m.t("dev.section"), footnote: m.installDevice.isEmpty ? "" : (needsCertificate ? m.t("dev.teamNoCert") + " " : "") + m.t("dev.note")) {
             row(m.t("dev.target"), detail: m.devicesChecked && m.devices.isEmpty ? m.t("dev.noDevices") : "") {
                 if !m.devicesChecked { ProgressView().controlSize(.small) }
                 Button(m.t("dev.refresh")) { m.refreshDevices() }.buttonStyle(.plain).font(.manrope(13)).foregroundStyle(.secondary)
