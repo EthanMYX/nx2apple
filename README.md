@@ -66,7 +66,7 @@ follows upstream automatically. What it adds:
 
 - [Features at a glance](#features-at-a-glance)
 - [Quick start](#quick-start)
-- [Supported games](#supported-games)
+- [Supported games](#games) — the full table; [verified here](#verified-games) first
 - [How it works](#how-it-works)
 - [Update history](#update-history)
 - [Contributing shaders and game support](#contributing-shaders-and-game-support)
@@ -106,7 +106,7 @@ follows upstream automatically. What it adds:
 
 ---
 
-## Supported games
+## Verified games
 
 **3 verified end to end on this fork** (build → install → play on a real iPhone), **29 reported
 playable upstream**, **58 profiles** in total. The full table with the exact update version each
@@ -114,7 +114,6 @@ game needs is [below](#games).
 
 | Game | Verified here | Notes |
 |---|---|---|
-| 2026-10-27 | v0.4.8 | **The Mac launcher becomes usable**: install an iPhone build on a paired device (#28), a controller drives the whole launcher (#56), launch options split into basic and advanced (#54) with Display mode and the render scale in real pixels (#55) and a Mods section through `DM_ROMFS_OVERLAY` (#57), keys and controller buttons remappable (#39); **the build tools update when the app opens** (#60) and **a new version says what it changes** before installing; fixes: every rewrite of every game crashed (`patch_nso.py`'s `TEXT_LO` used before assignment, #59), the Mac app refused every build with "requires Python 3.12" (#53), a ROMs folder holding several games could not build any of them (#58), a failed build pointed at a log that was off screen (#52), a Chinese Windows showed an English interface, CI could not open issues |
 | **Tears of the Kingdom** | ✅ | 304,243 files → 127 archive shards, byte-verified |
 | **Hades II** | ✅ | 33-file archive |
 | **Animal Crossing: New Horizons** | ✅ | 103,645 files → 72 shards, runs smoothly |
@@ -207,6 +206,8 @@ Newest first. The fork follows upstream daily, so its game list and host fixes a
 
 | Date | Version | What changed |
 |---|---|---|
+| 2026-10-27 | v0.4.9 | **The library follows the folder**: a Mac game's saves and log live beside the .app and migrate from `~/Library` on first run; **the iPhone's game data can live anywhere** (Files-app picker, remembered); **all eight tracker features landed** (#77–#84: key pre-check, drag & drop, build notifications, older-tools flag, free space, saves between Mac and device, copy diagnostics, controller layouts); Windows: Chinese UI fixed, the Metal probe works under a Chinese user name, the failed-install crash is gone, the Vulkan SDK is found by itself |
+| 2026-10-27 | v0.4.8 | **The Mac launcher becomes usable**: install an iPhone build on a paired device (#28), a controller drives the whole launcher (#56), launch options split into basic and advanced (#54) with Display mode and the render scale in real pixels (#55) and a Mods section through `DM_ROMFS_OVERLAY` (#57), keys and controller buttons remappable (#39); **the build tools update when the app opens** (#60) and **a new version says what it changes** before installing; fixes: every rewrite of every game crashed (`patch_nso.py`'s `TEXT_LO` used before assignment, #59), the Mac app refused every build with "requires Python 3.12" (#53), a ROMs folder holding several games could not build any of them (#58), a failed build pointed at a log that was off screen (#52), a Chinese Windows showed an English interface, CI could not open issues |
 | 2026-10-27 | v0.4.7 | **79 game profiles** (+7: Octopath Traveler, Donkey Kong Country Returns HD, Donkey Kong Country: Tropical Freeze, Mario + Rabbids Sparks of Hope, Kirby and the Forgotten Land, Yoshi's Crafted World, Xenoblade Chronicles 3) from the daily sync; **one host binary, any game's memory layout** (runtime profiles — the foundation for the universal launcher, which has not been built yet); **the language toggle translates the whole interface**; **Xcode betas count** (the check asks xcode-select); a loud notice when an upstream update invalidates cached shaders; the output folder documented as the build cache's home; Windows front end: in-app Python 3.12, SDK clone past Windows' path-length limit, LLVM verified by compiling rather than --version, no more black console windows; rebuilding on an external exFAT work folder no longer crashes |
 | 2026-10-26 | v0.4.6 | **Windows app fixed against real hardware reports**: the missing .NET SDK row (it never appeared, so nothing could install it), no more black console windows stealing the foreground, download mirrors chosen by a speed probe (a 974 s LLVM download on a mainland connection), tools installed outside the app folder so updates stop deleting them, and repository checks that say what git is doing |
 | 2026-10-26 | v0.4.5 | **Mac app output** (a double-clickable .app from the same build); **A15/A16 and earlier devices** via CPU BC decode, as an app switch; per-game data folders (`Documents/games/<id>/`) so an external drive works; NRO header no longer scanned as code; the nightly sync can no longer fail silently |
