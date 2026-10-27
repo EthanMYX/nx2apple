@@ -291,9 +291,10 @@ final class LibraryTests: XCTestCase {
     }
 
     /// An iPhone build with a device and a team: the script prepares the Xcode project, romfs.img is packed as for
-    /// sideloading, xcodebuild signs the app without the game files for the device, devicectl installs it and copies the
-    /// game's folder into its Documents, and the library opens it there. The tools are stand-ins; nothing is signed.
-    @MainActor func testBuildSignsAndInstallsOnTheChosenDevice() throws {
+    /// sideloading, xcodebuild signs the app without the game files for the device (the first try fails on a taken
+    /// App ID, so the retry under the team's own bundle ID runs too), devicectl installs it, the game files go over
+    /// once the player answered the transfer question, and the library opens it there. The tools are stand-ins; nothing is signed.
+    @MainActor private func runInstallFlow(transfer: Bool) throws -> (BuildModel, [String], URL, URL) {
         guard FileManager.default.isExecutableFile(atPath: "/usr/bin/python3") else { throw XCTSkip("System Python is required for the process fixture") }
         let saved = ["repoPath", "buildTarget", "buildOutputDirectory", "installDevice", "signingTeam"].map { ($0, UserDefaults.standard.object(forKey: $0)) }
         defer { for (key, value) in saved { UserDefaults.standard.set(value, forKey: key) } }
@@ -340,6 +341,10 @@ final class LibraryTests: XCTestCase {
         if a[0] == 'xcodebuild' and '-list' in a:
             print('Command line invocation:'); print(json.dumps({'project': {'schemes': ['DmIOS', 'Test (0100535012974000)']}}))
         elif a[0] == 'xcodebuild':
+            if 'PRODUCT_BUNDLE_IDENTIFIER=' not in ' '.join(a):
+                # App IDs are global: the plain one is registered to another team, and the app retries under a team variant
+                print('error: "iOS Team Provisioning Profile" cannot be registered to your development team', flush=True)
+                sys.exit(1)
             app = pathlib.Path(a[a.index('-derivedDataPath') + 1]) / 'Build/Products/Release-iphoneos/DmIOS.app'
             app.mkdir(parents=True)
             with (app / 'Info.plist').open('wb') as f: plistlib.dump({'CFBundleIdentifier': 'org.nxnative.test'}, f)
@@ -356,16 +361,37 @@ final class LibraryTests: XCTestCase {
         model.slots[0].paths = [base.path]; model.slots[3].paths = [keys.path]
         let finished = expectation(description: "Signed and installed")
         let token = model.$done.filter { $0 }.prefix(1).sink { _ in finished.fulfill() }
+        let asked = model.$transferAsk.filter { $0 }.prefix(1).sink { _ in model.transferAnswer(transfer) }
         model.startBuild()
         wait(for: [finished], timeout: 20)
-        withExtendedLifetime(token) {}
+        withExtendedLifetime(token) {} ; withExtendedLifetime(asked) {}
         let log = try String(contentsOf: calls, encoding: .utf8).split(separator: "\n").map(String.init)
+        return (model, log, calls, base)
+    }
+
+    /// The player may rather hand the game files to the device themselves (a fast external drive in Files):
+    /// a skipped copy still counts as installed, and nothing is sent over USB.
+    @MainActor func testSkippingTheTransferInstallsWithoutCopying() throws {
+        let (model, log, _, _) = try runInstallFlow(transfer: false)
+        XCTAssertFalse(log.contains { $0.hasPrefix("devicectl device copy") })
+        XCTAssertEqual(model.installedOn, "00008150-AAAA")
+        XCTAssertEqual(model.doneNote, String(format: model.t("dev.copySkipped"), "iPhone"))
+        XCTAssertEqual(model.stages.filter { $0.id >= 1000 }.map(\.state), [.done, .done, .done])   // pack, sign, install — no copy row
+    }
+
+    @MainActor func testBuildSignsAndInstallsOnTheChosenDevice() throws {
+        let (model, log, calls, base) = try runInstallFlow(transfer: true)
         let work = temporary.appendingPathComponent(titleID + "_build").path
         XCTAssertTrue(log[0].contains("--prepare-xcode --keep-extracted --team-id TEAM123456"))
         XCTAssertFalse(log[0].contains(" -o "))   // no IPA: the project goes to the device
         let build = try XCTUnwrap(log.first { $0.hasPrefix("xcodebuild -project") })
         for part in ["-scheme Test (0100535012974000)", "-destination id=00008150-AAAA", "-derivedDataPath \(work)/xcode-derived-data",
                      "-allowProvisioningUpdates", "DEVELOPMENT_TEAM=TEAM123456", "DM_COPY_ROMFS=NO"] { XCTAssertTrue(build.contains(part), part) }
+        // The first sign failed on the taken App ID; the retry ran under the team's bundle ID and kept the same stage row.
+        let signs = log.filter { $0.hasPrefix("xcodebuild -project") }
+        XCTAssertEqual(signs.count, 2)
+        XCTAssertTrue(signs[1].contains("PRODUCT_BUNDLE_IDENTIFIER=org.nxnative.\(titleID).TEAM123456"), String(signs[1]))
+        XCTAssertEqual(Set(model.stages.filter { $0.id >= 1000 }.map(\.id)).count, 4)   // a retried stage keeps its row instead of piling up duplicates
         let app = work + "/xcode-derived-data/Build/Products/Release-iphoneos/DmIOS.app"
         let archive = temporary.path + "/games/\(titleID)"
         // the archive is packed before signing, the app installed before the archive goes into its Documents

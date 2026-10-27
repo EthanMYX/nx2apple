@@ -137,6 +137,20 @@ final class BuildModel: ObservableObject {
     }
     @Published var installedOn = ""       // the device the last build went to (its UDID)
     @Published var installedAppPath = ""  // the signed app that went there
+    @Published var transferAsk = false    // the transfer-the-game-files question is up: USB from the Mac is slow, so copying is the player's call
+    private var transferHandler: ((Bool) -> Void)?
+
+    /// Asks whether to copy the game files to the device now, and runs `then` with the answer on the main queue.
+    func askTransfer(_ then: @escaping (Bool) -> Void) {
+        transferHandler = then
+        transferAsk = true
+    }
+
+    func transferAnswer(_ ok: Bool) {
+        guard let then = transferHandler else { return }
+        transferHandler = nil
+        then(ok)
+    }
     private var bundleID = ""             // from the script's "bundle ID:" line
     var xcrunPath = "/usr/bin/xcrun"      // tests stand in for xcodebuild and devicectl
 
@@ -1539,12 +1553,30 @@ final class BuildModel: ObservableObject {
                 return self.finishInstall(String(format: self.t("dev.noProject"), self.shortPath(app + "/Info.plist")))
             }
             let tid = Self.titleID(self.basePath).map { String(format: "%016llX", $0) } ?? "game"
-            self.runTool(id: 1003, name: String(format: self.t("dev.copyStage"), name),
-                         Self.archiveCopy(xcrun: xcrun, device: device, bundle: bundle, archive: archive, titleID: tid), step: Self.installStep) { error in
-                if let error { return self.finishInstall(String(format: self.t("dev.copyFailed"), error)) }
-                self.installedOn = device
-                self.installedAppPath = app
-                self.finishInstall(nil)
+            // Copying the game files over USB is the slowest part of an install and the player may
+            // rather hand the data to the device themselves (a fast external drive in Files), so it
+            // is their call. Without game files there is nothing to ask about.
+            let copy = {
+                self.runTool(id: 1003, name: String(format: self.t("dev.copyStage"), name),
+                             Self.archiveCopy(xcrun: xcrun, device: device, bundle: bundle, archive: archive, titleID: tid), step: Self.installStep) { error in
+                    if let error { return self.finishInstall(String(format: self.t("dev.copyFailed"), error)) }
+                    self.installedOn = device
+                    self.installedAppPath = app
+                    self.finishInstall(nil)
+                }
+            }
+            guard FileManager.default.fileExists(atPath: archive + "/romfs.img") else { return copy() }
+            self.askTransfer { ok in
+                guard ok else {
+                    self.installedOn = device
+                    self.installedAppPath = app
+                    self.running = false
+                    self.done = true
+                    self.doneNote = String(format: self.t("dev.copySkipped"), name)
+                    self.cleanupStaging()
+                    return
+                }
+                copy()
             }
         }
     }
@@ -1640,7 +1672,14 @@ final class BuildModel: ObservableObject {
     /// its progress in the stage. `then` gets nil on success, else the last error line.
     private func runTool(id: Int, name: String, _ command: [String], step: @escaping (String) -> (detail: String, percent: Double?)?,
                          then: @escaping (String?) -> Void) {
-        stages.append(Stage(id: id, name: name, state: .running, started: Date()))
+        // A stage that runs again (the team-variant signing retry uses the same id) keeps its row:
+        // a second row with that id would never see an update again — every lookup takes the first
+        // match — and would spin for ever after the build moved on.
+        if let i = stages.firstIndex(where: { $0.id == id }) {
+            stages[i] = Stage(id: id, name: name, state: .running, started: Date())
+        } else {
+            stages.append(Stage(id: id, name: name, state: .running, started: Date()))
+        }
         append("[\(name)] \(command.joined(separator: " "))\n")
         let p = Process()
         p.executableURL = URL(fileURLWithPath: command[0])
@@ -2130,6 +2169,12 @@ struct BuilderView: View {
             if let id, id.hasPrefix("set.") { withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .center) } }
         }
         .modifier(GameFilesDrop(enabled: !settings && !m.running, label: m.t("drop.hint")) { m.take(dropped: $0) })   // DropFiles.swift
+        .alert(String(format: m.t("dev.askTransferTitle"), m.deviceName(m.installDevice)), isPresented: $m.transferAsk) {
+            Button(m.t("dev.transferNow")) { m.transferAnswer(true) }
+            Button(m.t("dev.transferSkip"), role: .cancel) { m.transferAnswer(false) }
+        } message: {
+            Text(m.t("dev.askTransferText"))
+        }
         }
         .buttonStyle(LauncherSecondaryButtonStyle())
     }
