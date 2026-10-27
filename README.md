@@ -237,6 +237,8 @@ useful:**
 Issues with a full `Documents/log.txt` get looked at first — that log usually names the exact
 missing piece.
 
+Open an issue with one of the [issue forms](https://github.com/LNPANDY/NX2Apple/issues/new/choose) (game problem, build problem, launcher); [CONTRIBUTING.md](CONTRIBUTING.md) says what a report needs.
+
 ## Staying current with upstream
 
 A scheduled GitHub Actions workflow (`.github/workflows/sync-upstream.yml`, daily 21:30 UTC, also
