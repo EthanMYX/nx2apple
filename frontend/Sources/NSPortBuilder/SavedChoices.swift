@@ -119,12 +119,32 @@ extension LaunchSetting {
     }
 }
 
+extension SavedChoices {
+    /// Whether the app's launcher reads the store itself. seedds/nxnative's pack_app.py writes `DMSettings` (the rules launcher.c checks
+    /// a saved choice against) into Info.plist only together with that reading (#431), so its presence means "the store applies" and an
+    /// app without it has an older launcher.c that ignores the preferences domain. Those apps are given the choices in the environment.
+    static func appReadsStore(app: String) -> Bool {
+        let plist = URL(fileURLWithPath: app).appendingPathComponent("Contents/Info.plist")
+        guard let data = try? Data(contentsOf: plist),
+              let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { return false }
+        return info["DMSettings"] is [Any]
+    }
+}
+
 extension LibraryGame {
-    /// The environment a Mac game is started with: launch overrides only, never written to the store. The rows of launcher.json are
-    /// saved choices the app reads itself; what is here is the Controls page's layout, what only this launcher has (Display mode),
-    /// the mods, and DM_LAUNCHER=0 (this launcher is the settings window, so the app's own is skipped; saved choices still apply).
-    func startEnvironment(controls: [String: String], settings: [LaunchSetting], mods: [GameMod]) -> [String: String] {
+    /// The environment a Mac game is started with: launch overrides, never written to the store. The rows of launcher.json are saved
+    /// choices; an app whose launcher reads the store (`appReadsStore`) gets none of them here, since a value in the environment would
+    /// override a choice made elsewhere. An older app does not read it, so it is given the saved non-default choices as variables, as
+    /// this launcher always did. The rest is the Controls page's layout, what only this launcher has (Display mode), the mods, and
+    /// DM_LAUNCHER=0 (this launcher is the settings window, so the app's own is skipped; saved choices still apply).
+    func startEnvironment(controls: [String: String], settings: [LaunchSetting], mods: [GameMod],
+                          store: SavedChoices? = nil, appReadsStore: Bool = true) -> [String: String] {
         var environment = controls
+        if !appReadsStore, let store {
+            for s in settings where s.storeBacked {
+                if let v = store.value(s), !s.isDefault(v) { environment[s.env] = v }
+            }
+        }
         environment.merge(launchEnvironment(settings)) { _, own in own }
         environment.merge(modEnvironment(mods)) { _, mods in mods }
         environment["DM_LAUNCHER"] = "0"

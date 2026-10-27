@@ -26,7 +26,7 @@ final class SavedChoicesTests: XCTestCase {
     private let scale = #"{"env": "DM_RENDER_SCALE", "kind": "range", "section": "Game", "label": "Render scale", "note": "", "default": "1.0", "min": 0.5, "max": 1.0, "step": 0.05}"#
     private let hold = #"{"env": "DM_FPS_HOLD", "kind": "toggle", "section": "Performance", "label": "Hold", "note": "", "default": "on", "on": "on", "off": "off"}"#
 
-    private func app(_ rows: [String], schema: Int? = 1, bundle: Bool = true) throws -> String {
+    private func app(_ rows: [String], schema: Int? = 1, bundle: Bool = true, dmSettings: Bool = false) throws -> String {
         let app = temporary.appendingPathComponent("Game.app")
         let dm = app.appendingPathComponent("Contents/Resources/dm")
         try FileManager.default.createDirectory(at: dm, withIntermediateDirectories: true)
@@ -34,6 +34,7 @@ final class SavedChoicesTests: XCTestCase {
         try Data(#"{\#(head)"game": "\#(titleID)", "settings": [\#(rows.joined(separator: ","))]}"#.utf8).write(to: dm.appendingPathComponent("launcher.json"))
         var info: [String: Any] = ["DMTitleID": titleID]
         if bundle { info["CFBundleIdentifier"] = bundleID }
+        if dmSettings { info["DMSettings"] = Self.rules(rows) }
         try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: app.appendingPathComponent("Contents/Info.plist"))
         return app.path
     }
@@ -173,5 +174,71 @@ final class SavedChoicesTests: XCTestCase {
         env = game.startEnvironment(controls: [:], settings: settings, mods: [])
         XCTAssertEqual(env, ["DM_LAUNCHER": "0", "DM_FULLSCREEN": "1"], "a launcher-only setting is an override, never written to the store")
         XCTAssertNil(store.raw("DM_FULLSCREEN"))
+    }
+
+    /// DMSettings as seedds/nxnative's dm/mac/pack_app.py settings_rules writes it.
+    private static func rules(_ rows: [String]) -> [[String: Any]] {
+        rows.compactMap { row in
+            guard let s = try? JSONDecoder().decode(LaunchSetting.self, from: Data(row.utf8)) else { return nil }
+            switch s.kind {
+            case "range": return ["env": s.env, "min": s.min ?? 0, "max": s.max ?? 0]
+            case "choice": return ["env": s.env, "values": (s.options ?? []).map { $0[0] }]
+            default: return ["env": s.env, "values": [s.on ?? "1", s.off ?? "0"]]
+            }
+        }
+    }
+
+    /// dm/mac/launcher.c's saved_accepted, line for line: one of the rule's values, else a number from min to max.
+    private static func launcherCAccepts(_ rule: [String: Any], _ v: String) -> Bool {
+        if let values = rule["values"] as? [String] { return values.contains(v) }
+        guard let lo = rule["min"] as? Double, let hi = rule["max"] as? Double else { return false }
+        return v.withCString { c -> Bool in
+            var end: UnsafeMutablePointer<CChar>?
+            let x = strtod(c, &end)
+            let space = isspace(Int32(UInt8(bitPattern: c.pointee))) != 0
+            return c.pointee != 0 && !space && strpbrk(c, "xX") == nil && end?.pointee == 0 && x == x && x >= lo && x <= hi
+        }
+    }
+
+    func testWhatIsWrittenPassesTheRulesLauncherCChecks() throws {
+        let wide = #"{"env": "DM_RENDER_SCALE", "kind": "range", "section": "Picture", "label": "Render scale", "note": "", "default": "1.0", "min": 0.5, "max": 1.35, "step": 0.05}"#
+        let rows = [fps, wide, hold]
+        let path = try app(rows, dmSettings: true)
+        let list = try XCTUnwrap(LaunchSetting.read(app: path))
+        let info = try XCTUnwrap(PropertyListSerialization.propertyList(from: Data(contentsOf: URL(fileURLWithPath: path + "/Contents/Info.plist")), format: nil) as? [String: Any])
+        let rules = try XCTUnwrap(info["DMSettings"] as? [[String: Any]])
+        let store = SavedChoices(domain: bundleID)
+        // What the sheet writes: a slider's "%.2f" at every step, the options, on and off
+        var written: [(LaunchSetting, String)] = []
+        for n in stride(from: 0.5, through: 1.35, by: 0.05) { written.append((list[1], String(format: "%.2f", n))) }
+        written += [(list[0], "60"), (list[2], "off")]
+        for (s, v) in written where !s.isDefault(v) {
+            store.set(s, v)
+            let stored = try XCTUnwrap(store.raw(s.env) as? String, "\(s.env)=\(v) is kept")
+            let rule = try XCTUnwrap(rules.first { $0["env"] as? String == s.env })
+            XCTAssertTrue(Self.launcherCAccepts(rule, stored), "launcher.c accepts \(s.env)=\(stored)")
+            XCTAssertTrue(s.accepts(stored))
+        }
+        // The two readers agree on what they refuse
+        let rule = try XCTUnwrap(rules.first { $0["env"] as? String == "DM_RENDER_SCALE" })
+        for v in ["0x1", " 0.8", "nan", "", "0.4", "1.36", "1e0x", "1", "1.", "+1", "0.5", "1.35", "1e0", "inf"] {
+            XCTAssertEqual(Self.launcherCAccepts(rule, v), list[1].accepts(v), "range value '\(v)'")
+        }
+    }
+
+    func testAppReadsTheStoreOnlyWithDMSettings() throws {
+        let withRules = try app([fps, scale, hold], dmSettings: true)
+        XCTAssertTrue(SavedChoices.appReadsStore(app: withRules))
+        let older = try app([fps, scale, hold])
+        XCTAssertFalse(SavedChoices.appReadsStore(app: older))
+        let store = SavedChoices(domain: bundleID)
+        let list = try XCTUnwrap(LaunchSetting.read(app: older))
+        store.set(list[0], "60"); store.set(list[1], "0.75")
+        let game = LibraryGame(titleID: titleID, name: "Z", appPath: older)
+        XCTAssertEqual(game.startEnvironment(controls: [:], settings: list, mods: [], store: store, appReadsStore: true),
+                       ["DM_LAUNCHER": "0"], "the app reads the store itself: nothing for the rows")
+        XCTAssertEqual(game.startEnvironment(controls: [:], settings: list, mods: [], store: store, appReadsStore: false),
+                       ["DM_LAUNCHER": "0", "DM_FPS_TARGET": "60", "DM_RENDER_SCALE": "0.75"],
+                       "an older launcher.c: the saved non-default choices go in the environment, defaults stay out")
     }
 }

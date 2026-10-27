@@ -643,7 +643,9 @@ struct ContentView: View {
             library.migrateLaunchOptions()
             let settings = LaunchSetting.forMac(app: game.appPath, titleID: game.titleID, repo: m.repoPath, labels: m.t) ?? []
             let mods = GameMod.list(in: GameMod.folder(for: game, library: library.folder), titleID: game.titleID)
-            let environment = game.startEnvironment(controls: controls.environment, settings: settings, mods: mods)
+            let environment = game.startEnvironment(controls: controls.environment, settings: settings, mods: mods,
+                                                  store: SavedChoices(app: game.appPath, titleID: game.titleID),
+                                                  appReadsStore: SavedChoices.appReadsStore(app: game.appPath))
             if !environment.isEmpty { configuration.environment = environment }
             NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: game.appPath), configuration: configuration) { _, error in
                 DispatchQueue.main.async {
