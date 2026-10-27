@@ -120,6 +120,22 @@ reads through `dm/host/input_map.h` — upstream's
 while it is open, and listed in `docs/env_switches.tsv`. A host built before the carrier
 has no `input_map.h` and ignores both, so its games play with the default keys.
 
+The controller has four layouts, each only a `DM_PAD_MAP` value. **Standard layout**
+(the default) passes nothing: the host reads the face buttons by position, in the
+Nintendo layout (right A, bottom B, top X, left Y), for PlayStation and other
+controllers. **By label** passes `A=B,B=A,X=Y,Y=X`, so A, B, X and Y are the letters
+printed on a Nintendo or Xbox controller: GameController reports both families'
+buttons by their letters (an Xbox controller's letters are Apple's button diamond, and
+a Pro Controller's A, on the right, arrives as `buttonA`, as
+[seedds/nxnative#382](https://github.com/seedds/nxnative/pull/382) found), which the
+host's positional reading turns into the other letter, so one swap serves both.
+**Custom** is the per-button choice; changing a button switches to it. **Auto** picks
+By label or Standard from `GCController.productCategory` of the controller connected
+when **Play** is pressed (Nintendo, Switch Pro, Joy-Con or Xbox in its name: By label).
+One map goes to every controller, so two different kinds at once cannot both be right;
+a per-controller choice belongs in the host (#382 does it for Nintendo controllers).
+The page shows the connected controller and what Auto picks for it.
+
 ## Artwork
 
 The launcher shows, in this order: a custom image chosen under **Manage > Change

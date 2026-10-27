@@ -830,6 +830,33 @@ final class LibraryTests: XCTestCase {
             try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent("diagnostics-copied.png"))
             window.orderOut(nil)
         }
+
+        // ---- Controller layouts (#70): the Controls sheet scrolled to the layout by the controller's focus, Auto with a
+        // stand-in Xbox controller, then By label with none connected (a suite of its own; no real controller is read) ----
+        do {
+            let suite = "nxnative-visual-qa-control-presets"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defaults.removePersistentDomain(forName: suite)
+            defer { defaults.removePersistentDomain(forName: suite) }
+            for (name, mode, category) in [("controls-layout-auto", PadMode.auto, "Xbox One" as String?), ("controls-layout-bylabel", .byLabel, nil)] {
+                let layout = ControlLayout(defaults: defaults)
+                layout.controllerCategory = { category }
+                layout.setPadMode(mode)
+                let focus = PadFocus()
+                let host = NSHostingView(rootView: ControlsView(m: model, layout: layout).environmentObject(focus))
+                let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
+                window.contentView = host
+                window.orderFront(nil)
+                RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+                focus.scope = "controls"
+                focus.show(default: "pad.mode")
+                RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+                let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: rep)
+                try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent(name + ".png"))
+                window.orderOut(nil)
+            }
+        }
     }
 
     /// Issue #52: the failure note names the last real line, not just the exit code.

@@ -29,21 +29,35 @@ final class ControlLayout: ObservableObject {
 
     /// Function → key code, nil for no key; only functions moved from their default key.
     @Published private(set) var keys: [String: Int?] = [:]
-    /// Button → the button it sends, "none" for nothing; only buttons that send another.
+    /// Button → the button it sends, "none" for nothing; only buttons that send another. The Custom layout's.
     @Published private(set) var pad: [String: String] = [:]
+    /// The controller's layout (ControlPresets.swift): Standard, By label, Auto between the two, or Custom (`pad`).
+    @Published private(set) var padMode: PadMode = .standard
+    /// The connected controller's GCController.productCategory, which Auto goes by; tests stand in for it.
+    var controllerCategory: () -> String? = ControlLayout.connectedCategory
     private let defaults: UserDefaults
-    private struct Saved: Codable { var keys: [String: Int]; var pad: [String: String] }   // a key code, -1 for no key
+    /// A key code, -1 for no key. `mode` is nil in settings saved before the layouts, which had only the custom buttons.
+    private struct Saved: Codable { var keys: [String: Int]; var pad: [String: String]; var mode: String? }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         if let data = defaults.data(forKey: "controlLayout"), let saved = try? JSONDecoder().decode(Saved.self, from: data) {
             keys = saved.keys.filter { k, code in Self.functions.contains { $0.id == k } && code < 128 }.mapValues { $0 < 0 ? nil : $0 }
             pad = saved.pad.filter { b, to in Self.buttons.contains(b) && (to == "none" || Self.buttons.contains(to)) }
+            padMode = saved.mode.flatMap(PadMode.init(rawValue:)) ?? (pad.isEmpty ? .standard : .custom)
         }
     }
 
-    var isDefault: Bool { keys.isEmpty && pad.isEmpty }
-    var changeCount: Int { keys.count + pad.count }
+    var isDefault: Bool { keys.isEmpty && padChanges == 0 }
+    var changeCount: Int { keys.count + padChanges }
+    /// A preset counts as one change; Custom as its buttons.
+    private var padChanges: Int {
+        switch padMode {
+        case .standard: return 0
+        case .custom: return pad.count
+        case .byLabel, .auto: return 1
+        }
+    }
 
     /// The key a function is on now.
     func key(_ f: Function) -> Int? { keys[f.id] ?? f.defaultKey }
@@ -59,28 +73,36 @@ final class ControlLayout: ObservableObject {
         save()
     }
 
-    func sends(_ button: String) -> String { pad[button] ?? button }
+    /// What a button sends in the layout chosen (for Auto, the one it picks for the controller connected now).
+    func sends(_ button: String) -> String { activePad[button] ?? button }
 
+    /// A button changed by hand makes the layout Custom, starting from what the buttons sent until then.
     func setSends(_ button: String, _ to: String) {
+        if padMode != .custom { pad = activePad; padMode = .custom }
         pad[button] = to == button ? nil : to
         save()
     }
 
+    func setPadMode(_ mode: PadMode) { padMode = mode; save() }
+
+    private var activePad: [String: String] { padMap(for: padMode, category: padMode == .auto ? controllerCategory() : nil) }
+
     func resetKeyboard() { keys = [:]; save() }
-    func resetController() { pad = [:]; save() }
+    func resetController() { pad = [:]; padMode = .standard; save() }
 
     /// DM_KEYMAP and DM_PAD_MAP for the changes, in the sheet's order; empty when nothing changed.
     var environment: [String: String] {
         var env: [String: String] = [:]
         let k = Self.functions.compactMap { f in keys[f.id].map { "\(f.id)=\($0.map(String.init) ?? "none")" } }
         if !k.isEmpty { env["DM_KEYMAP"] = k.joined(separator: ",") }
-        let p = Self.buttons.compactMap { b in pad[b].map { "\(b)=\($0)" } }
+        let active = activePad
+        let p = Self.buttons.compactMap { b in active[b].map { "\(b)=\($0)" } }
         if !p.isEmpty { env["DM_PAD_MAP"] = p.joined(separator: ",") }
         return env
     }
 
     private func save() {
-        if let data = try? JSONEncoder().encode(Saved(keys: keys.mapValues { $0 ?? -1 }, pad: pad)) { defaults.set(data, forKey: "controlLayout") }
+        if let data = try? JSONEncoder().encode(Saved(keys: keys.mapValues { $0 ?? -1 }, pad: pad, mode: padMode.rawValue)) { defaults.set(data, forKey: "controlLayout") }
     }
 
     /// A key's name on a US keyboard, by virtual key code (the host reads codes, so the name is only for the label).
@@ -122,6 +144,7 @@ struct ControlsView: View {
                 VStack(alignment: .leading, spacing: 24) {
                     section(m.t("controls.sticks"), ControlLayout.functions.filter(\.isDirection)) { keyRow($0) }
                     section(m.t("controls.keyButtons"), ControlLayout.functions.filter { !$0.isDirection }) { keyRow($0) }
+                    PadModeSection(m: m, layout: layout)
                     section(m.t("controls.pad"), ControlLayout.buttons, note: m.t("controls.padNote")) { padRow($0) }
                 }
                 .padding(.horizontal, 30).padding(.bottom, 24)
