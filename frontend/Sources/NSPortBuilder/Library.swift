@@ -255,6 +255,22 @@ final class GameLibrary: ObservableObject {
         discover()
     }
 
+    /// Where installed games are looked for besides the library folder (tests empty it).
+    var applicationFolders = [URL(fileURLWithPath: "/Applications"),
+                              FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications")]
+
+    /// Games moved to /Applications or ~/Applications after a build (the CLI leaves the app
+    /// beside the game, and people install it from there). Top level only, as the Finder
+    /// puts them; the library folder comes first, so its copy wins over an installed one.
+    static func installedApps(in dirs: [URL]) -> [URL] {
+        let fm = FileManager.default
+        return dirs.flatMap { dir in
+            ((try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? [])
+                .filter { (try? MacGameBundle.read($0)) != nil }
+                .sorted { $0.path < $1.path }
+        }
+    }
+
     /// A bounded scan of build locations, never of a game's multi-GB contents.
     static func builtApps(in root: URL) -> [URL] {
         let fm = FileManager.default
@@ -316,9 +332,9 @@ final class GameLibrary: ObservableObject {
     func discover(repo: String = BuildModel.findRepo()) {
         guard !folder.isEmpty, !scanning else { return }
         scanning = true
-        let root = URL(fileURLWithPath: folder)
+        let root = URL(fileURLWithPath: folder), installed = applicationFolders
         DispatchQueue.global(qos: .utility).async {
-            let apps = Self.builtApps(in: root)
+            let apps = Self.builtApps(in: root) + Self.installedApps(in: installed)
             let sources = Self.sourceGames(in: root, repo: repo)
             DispatchQueue.main.async {
                 let previousSelection = self.selectedID
