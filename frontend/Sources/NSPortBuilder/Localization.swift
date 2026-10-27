@@ -148,7 +148,7 @@ enum L10n {
         "keycheck.noHeaderKey": ("prod.keys 中缺少 header_key", "header_key is missing from prod.keys"),
         "keycheck.wrongHeaderKey": ("prod.keys 中的 header_key 打不开 %@", "The header_key in prod.keys doesn’t open %@"),
         "keycheck.cannotCheck": ("构建前无法检查这种格式：%@", "Can’t check this format before building: %@"),
-        "keycheck.tooOld": ("这些密钥比%1$@所需的旧：需要密钥世代 %2$ld（缺少 %3$@）。", "These keys are older than %1$@ needs: key generation %2$ld (%3$@ is missing)."),
+        "keycheck.tooOld": ("这些密钥比%1$@所需的旧：缺少 %2$@。", "These keys are older than %1$@ needs: %2$@ is missing."),
         "keycheck.firmware": ("请从系统版本 %@ 或更新的 Switch 重新导出 prod.keys。", "Dump prod.keys again from a Switch on firmware %@ or newer."),
         "keycheck.part.base": ("游戏本体", "the base game"),
         "keycheck.part.update": ("更新包", "the update"),

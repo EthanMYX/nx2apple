@@ -232,7 +232,7 @@ enum KeyCheck {
         case .wrongHeaderKey(let file): return String(format: t("keycheck.wrongHeaderKey"), file)
         case .cannotCheck(let file): return String(format: t("keycheck.cannotCheck"), file)
         case let .tooOld(part, generation, missing):
-            var s = String(format: t("keycheck.tooOld"), t("keycheck.part." + part.rawValue), generation, missing)
+            var s = String(format: t("keycheck.tooOld"), t("keycheck.part." + part.rawValue), missing)   // the key's name carries the generation, in hex
             if generation - 1 < firmware.count { s += " " + String(format: t("keycheck.firmware"), firmware[generation - 1]) }
             return s
         }

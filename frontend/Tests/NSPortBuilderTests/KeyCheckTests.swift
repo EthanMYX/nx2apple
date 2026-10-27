@@ -98,7 +98,7 @@ final class KeyCheckTests: XCTestCase {
         let outcome = KeyCheck.run(.init(keys: keys, files: [base, update]))
         XCTAssertEqual(outcome, .tooOld(part: .update, generation: 0x13, missing: "titlekek_12"), "the newest generation that is missing")
         let text = KeyCheck.message(outcome) { L10n.string($0, .en) }
-        XCTAssertTrue(text.contains("the update") && text.contains("key generation 19") && text.contains("titlekek_12") && text.contains("19.0.0"), text)
+        XCTAssertTrue(text.contains("the update") && !text.contains("generation 19") && text.contains("titlekek_12") && text.contains("19.0.0"), text)
         XCTAssertFalse(text.contains(hex(headerKey)) || text.contains("5a5a"), "never a key value")
         XCTAssertEqual(KeyCheck.run(.init(keys: keys, files: [base, ""])), .fits)
 
