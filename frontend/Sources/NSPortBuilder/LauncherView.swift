@@ -475,7 +475,9 @@ struct ContentView: View {
             // The launch options; the app's launcher (dm/mac/launcher.c) keeps a variable that is already set.
             // The keyboard and controller layout (Settings → Controls) goes to every game; a build whose host does not read it plays with the default keys.
             var environment = controls.environment
-            if let settings = LaunchSetting.read(app: game.appPath) { environment.merge(game.launchEnvironment(settings)) { _, own in own } }
+            if let settings = LaunchSetting.forMac(app: game.appPath, titleID: game.titleID, repo: m.repoPath, labels: m.t) {
+                environment.merge(game.launchEnvironment(settings)) { _, own in own }
+            }
             if !environment.isEmpty { configuration.environment = environment }
             NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: game.appPath), configuration: configuration) { _, error in
                 DispatchQueue.main.async {
