@@ -290,9 +290,9 @@ final class LibraryTests: XCTestCase {
         XCTAssertNil(DeviceTools.team(fromSubject: "subject=CN=Something"))
     }
 
-    /// An iPhone build with a device and a team: the script prepares the Xcode project, the RomFS archive is packed as for
+    /// An iPhone build with a device and a team: the script prepares the Xcode project, romfs.img is packed as for
     /// sideloading, xcodebuild signs the app without the game files for the device, devicectl installs it and copies the
-    /// archive into its Documents, and the library opens it there. The tools are stand-ins; nothing is signed.
+    /// game's folder into its Documents, and the library opens it there. The tools are stand-ins; nothing is signed.
     @MainActor func testBuildSignsAndInstallsOnTheChosenDevice() throws {
         guard FileManager.default.isExecutableFile(atPath: "/usr/bin/python3") else { throw XCTSkip("System Python is required for the process fixture") }
         let saved = ["repoPath", "buildTarget", "buildOutputDirectory", "installDevice", "signingTeam"].map { ($0, UserDefaults.standard.object(forKey: $0)) }
@@ -324,12 +324,12 @@ final class LibraryTests: XCTestCase {
         ev(ev='say', msg='[12:00:00] app name: Test; version: 1.0; bundle ID: org.nxnative.test')
         ev(ev='stage_end', k=1, name='prepare Xcode', ok=True, summary='', elapsed=1)
         """.write(to: script, atomically: true, encoding: .utf8)
-        let packer = temporary.appendingPathComponent("dm/tools/romfs_arc.py")   // stand-in: pack <RomFS> <base> writes <base>.idx and one shard
+        let packer = temporary.appendingPathComponent("dm/tools/romfs_image.py")   // stand-in: --reuse <RomFS> <image> writes the image
         try FileManager.default.createDirectory(at: packer.deletingLastPathComponent(), withIntermediateDirectories: true)
         try """
         import sys
-        open('\(calls.path)', 'a').write('romfs_arc ' + ' '.join(sys.argv[1:]) + '\\n')
-        open(sys.argv[3] + '.idx', 'wb').write(b'idx'); open(sys.argv[3] + '.00', 'wb').write(b'game')
+        open('\(calls.path)', 'a').write('romfs_image ' + ' '.join(sys.argv[1:]) + '\\n')
+        open(sys.argv[3], 'wb').write(b'image')
         """.write(to: packer, atomically: true, encoding: .utf8)
         let xcrun = temporary.appendingPathComponent("xcrun")
         try """
@@ -367,14 +367,14 @@ final class LibraryTests: XCTestCase {
         for part in ["-scheme Test (0100535012974000)", "-destination id=00008150-AAAA", "-derivedDataPath \(work)/xcode-derived-data",
                      "-allowProvisioningUpdates", "DEVELOPMENT_TEAM=TEAM123456", "DM_COPY_ROMFS=NO"] { XCTAssertTrue(build.contains(part), part) }
         let app = work + "/xcode-derived-data/Build/Products/Release-iphoneos/DmIOS.app"
-        let archive = temporary.path + "/games/\(titleID)/romfs"
+        let archive = temporary.path + "/games/\(titleID)"
         // the archive is packed before signing, the app installed before the archive goes into its Documents
-        let order = ["romfs_arc pack", "xcodebuild -project", "devicectl device install", "devicectl device copy"].map { step in log.firstIndex { $0.hasPrefix(step) } }
+        let order = ["romfs_image --reuse", "xcodebuild -project", "devicectl device install", "devicectl device copy"].map { step in log.firstIndex { $0.hasPrefix(step) } }
         XCTAssertEqual(order.compactMap { $0 }, order.compactMap { $0 }.sorted())
         XCTAssertEqual(order.compactMap { $0 }.count, 4)
         XCTAssertTrue(log.contains("devicectl device install app --device 00008150-AAAA \(app)"))
-        XCTAssertTrue(log.contains("devicectl device copy to --device 00008150-AAAA --source \(archive) --destination Documents/games/\(titleID)/romfs --domain-type appDataContainer --domain-identifier org.nxnative.test"))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: archive + "/romfs.idx"))
+        XCTAssertTrue(log.contains("devicectl device copy to --device 00008150-AAAA --source \(archive) --destination Documents/games/\(titleID) --domain-type appDataContainer --domain-identifier org.nxnative.test"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: archive + "/romfs.img"))
         XCTAssertEqual(model.archivePath, archive)
         XCTAssertEqual(model.installedOn, "00008150-AAAA")
         XCTAssertEqual(model.stages.filter { $0.id >= 1000 }.map(\.state), [.done, .done, .done, .done])

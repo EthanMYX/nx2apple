@@ -123,8 +123,8 @@ final class BuildModel: ObservableObject {
     // ---- Installing on an iPhone or iPad (Xcode with a development certificate) ----
     // Optional: with a paired device and a signing team chosen, the script prepares the game's Xcode project
     // (--prepare-xcode, the route its README gives developers), xcodebuild signs it for that device with the
-    // team (Xcode makes the provisioning profile) without the game files, devicectl installs it and copies the RomFS
-    // archive into its Documents, as a sideloaded copy has it. Without a device or a team the build stays an unsigned IPA, as before.
+    // team (Xcode makes the provisioning profile) without the game files, devicectl installs it and copies the game's
+    // folder (romfs.img, aoc/) into its Documents, as a sideloaded copy has it. Without a device or a team the build stays an unsigned IPA, as before.
     @Published var devices: [AppleDevice] = []
     @Published var teams: [SigningTeam] = []
     @Published var devicesChecked = false
@@ -1155,10 +1155,10 @@ final class BuildModel: ObservableObject {
 
     // MARK: Installing on a device
 
-    /// After the script prepared the Xcode project and the archive is packed: sign the app for the device without the
-    /// game files (DM_COPY_ROMFS=NO), install it, then copy the archive into its Documents/games/<title ID>/romfs, where
-    /// the app looks first (main.m), as a sideloaded copy has it. devicectl skips files that did not change, so a
-    /// reinstall sends the code and shaders, not the game again.
+    /// After the script prepared the Xcode project and the game data is packed: sign the app for the device without the
+    /// game files (DM_COPY_ROMFS=NO), install it, then copy the game's folder (romfs.img, aoc/) into its
+    /// Documents/games/<title ID>/, where the app looks first (main.m), as a sideloaded copy has it. devicectl skips files
+    /// that did not change, so a reinstall sends the code and shaders, not the game again.
     private func signAndInstall(archive: String) {
         let work = effectiveWorkDir, project = work + "/xcode/DmIOS.xcodeproj", derived = work + "/xcode-derived-data"
         let device = installDevice, team = signingTeam, name = deviceName(device), xcrun = xcrunPath
@@ -1201,10 +1201,10 @@ final class BuildModel: ObservableObject {
         cleanupStaging()
     }
 
-    /// The archive into the installed app's Documents, where main.m looks for this game's files first.
+    /// The game's folder (romfs.img, aoc/) into the installed app's Documents, where main.m looks for this game's files first.
     nonisolated static func archiveCopy(xcrun: String, device: String, bundle: String, archive: String, titleID: String) -> [String] {
         [xcrun, "devicectl", "device", "copy", "to", "--device", device, "--source", archive,
-         "--destination", "Documents/games/\(titleID)/romfs", "--domain-type", "appDataContainer", "--domain-identifier", bundle]
+         "--destination", "Documents/games/\(titleID)", "--domain-type", "appDataContainer", "--domain-identifier", bundle]
     }
 
     /// The scheme the script made for the game ("<name> (<profile>)"), from `xcodebuild -list`.

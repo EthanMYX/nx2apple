@@ -67,7 +67,7 @@ enum L10n {
         "dev.refresh": ("\u{5237}\u{65b0}", "Refresh"),
         "dev.team": ("\u{7b7e}\u{540d}\u{56e2}\u{961f}", "Signing team"),
         "dev.noTeam": ("\u{6ca1}\u{6709}\u{5f00}\u{53d1}\u{8bc1}\u{4e66}\u{3002}\u{5728} Xcode \u{4e2d}\u{767b}\u{5f55} Apple ID\u{ff08}\u{8bbe}\u{7f6e} \u{2192} \u{8d26}\u{6237}\u{ff09}\u{5373}\u{53ef}\u{83b7}\u{5f97}\u{3002}", "No development certificate. Sign in to Xcode with your Apple ID (Settings \u{2192} Accounts) to get one."),
-        "dev.note": ("Xcode 会为这台设备签名并直接安装，游戏文件以 RomFS 归档复制到 App 的“文稿”中，与侧载相同；第一次复制大型游戏需要几分钟。第一次需要在设备上开启开发者模式，并信任开发者（设置 → 通用 → VPN 与设备管理）。", "Xcode signs the game for this device and installs it there, then copies the game files into the app’s Documents as the RomFS archive, as for sideloading; the first copy of a large game takes a few minutes. The first time, turn on Developer Mode on the device and trust the developer (Settings → General → VPN & Device Management)."),
+        "dev.note": ("Xcode 会为这台设备签名并直接安装，游戏数据（romfs.img）复制到 App 的“文稿”中，与侧载相同；第一次复制大型游戏需要几分钟。第一次需要在设备上开启开发者模式，并信任开发者（设置 → 通用 → VPN 与设备管理）。", "Xcode signs the game for this device and installs it there, then copies the game data (romfs.img) into the app’s Documents, as for sideloading; the first copy of a large game takes a few minutes. The first time, turn on Developer Mode on the device and trust the developer (Settings → General → VPN & Device Management)."),
         "dev.signStage": ("\u{4e3a} %@ \u{7b7e}\u{540d}", "Sign for %@"),
         "dev.installStage": ("\u{5b89}\u{88c5}\u{5230} %@", "Install on %@"),
         "dev.copyStage": ("复制游戏文件到 %@", "Copy the game files to %@"),

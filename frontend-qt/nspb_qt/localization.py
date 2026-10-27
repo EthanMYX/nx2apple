@@ -33,7 +33,7 @@ TABLE: dict[str, tuple[str, str]] = {
     'dev.refresh': ('刷新', 'Refresh'),
     'dev.team': ('签名团队', 'Signing team'),
     'dev.noTeam': ('没有开发证书。在 Xcode 中登录 Apple ID（设置 → 账户）即可获得。', 'No development certificate. Sign in to Xcode with your Apple ID (Settings → Accounts) to get one.'),
-    'dev.note': ('Xcode 会为这台设备签名并直接安装，游戏文件以 RomFS 归档复制到 App 的“文稿”中，与侧载相同；第一次复制大型游戏需要几分钟。第一次需要在设备上开启开发者模式，并信任开发者（设置 → 通用 → VPN 与设备管理）。', 'Xcode signs the game for this device and installs it there, then copies the game files into the app’s Documents as the RomFS archive, as for sideloading; the first copy of a large game takes a few minutes. The first time, turn on Developer Mode on the device and trust the developer (Settings → General → VPN & Device Management).'),
+    'dev.note': ('Xcode 会为这台设备签名并直接安装，游戏数据（romfs.img）复制到 App 的“文稿”中，与侧载相同；第一次复制大型游戏需要几分钟。第一次需要在设备上开启开发者模式，并信任开发者（设置 → 通用 → VPN 与设备管理）。', 'Xcode signs the game for this device and installs it there, then copies the game data (romfs.img) into the app’s Documents, as for sideloading; the first copy of a large game takes a few minutes. The first time, turn on Developer Mode on the device and trust the developer (Settings → General → VPN & Device Management).'),
     'dev.signStage': ('为 %@ 签名', 'Sign for %@'),
     'dev.installStage': ('安装到 %@', 'Install on %@'),
     'dev.copyStage': ('复制游戏文件到 %@', 'Copy the game files to %@'),

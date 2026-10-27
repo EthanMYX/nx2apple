@@ -42,9 +42,9 @@ next to it. The script then prepares the game's Xcode project
 `xcodebuild -allowProvisioningUpdates` signs it for that device with the team
 (Xcode makes the provisioning profile), and `xcrun devicectl device install app`
 installs it. The game files take the same route as for sideloading. They are packed into
-the RomFS archive, and the app is built without them (`DM_COPY_ROMFS=NO`). After the
-install, `xcrun devicectl device copy to` puts the archive into the app's
-`Documents/games/<title ID>/romfs`, where the app looks first. devicectl skips files
+`games/<title ID>/romfs.img`, with any DLC in `aoc/` beside it, and the app is built
+without them (`DM_COPY_ROMFS=NO`). After the install, `xcrun devicectl device copy to`
+puts that folder into the app's `Documents/games/<title ID>/`, where the app looks first. devicectl skips files
 that did not change, so a reinstall sends the code and shaders, not the whole game
 again. The first copy of a large game takes a few minutes. The game then appears
 in the collection, and its button opens it on the device.
