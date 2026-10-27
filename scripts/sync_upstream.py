@@ -7,7 +7,8 @@ re-apply the fork's features, verify the result builds — and this script is th
 procedure, so a scheduled CI job can run it unattended.
 
 What it does:
-  1. diffs the two upstream refs over the vendored paths (dm/ scripts/ docs/ AGENTS.md ref/)
+  1. diffs the two upstream refs over the vendored paths (dm/ scripts/ docs/ AGENTS.md ref/), and
+     adds any vendored file upstream has that the fork's tree lacks
   2. applies adds and modifications file by file, and deletions — except the fork's own
      files (the RomFS archive layer), which upstream must not delete
   3. re-applies the fork's patches to the four files that carry them
@@ -44,7 +45,12 @@ OURS = {'dm/host/romfs_arc.c', 'dm/host/romfs_arc.h', 'dm/tools/romfs_arc.py',
         # writes the runtime profile; both are fork-only, so the file is never taken from upstream
         # (a verify-only patcher was not enough: the sync replaced it first and then complained).
         'dm/games/game.py',
-        'dm/gfx/tex/tests/t_bcdec.c'}
+        'dm/gfx/tex/tests/t_bcdec.c',
+        # The Increased Memory Limit guide the README links to; upstream has no such file, and the
+        # first wholesale sync deleted it.
+        'dm/ios/ENTITLEMENTS.md',
+        # This script: fork-only, so a PR that changes it is not a vendored edit (pr-scope reads OURS)
+        'scripts/sync_upstream.py'}
 # Vendored files that carry fork patches: taken fresh from upstream, then patched below.
 PATCHED = ('dm/host/hle_fs.c', 'dm/host/Makefile', 'dm/host/tests/Makefile', 'dm/ios/tools/build_ipa.sh',
            'scripts/build_ipa_from_nsp.py', 'dm/gfx/tools/shader_split.py',
@@ -60,13 +66,20 @@ def blob(rev, path):
     return r.stdout if r.returncode == 0 else None
 
 def upstream_changes(old, new):
-    """(kind, path) for every vendored file that differs, kind in AM D."""
+    """(kind, path) for every vendored file that differs, kind in AM D; plus an A for every vendored
+    file upstream has that the fork's tree lacks. The diff alone only sees files that changed between
+    the two refs, so a file the first sync missed never arrived: docs/geometry-metal-research.md (which
+    game notes link to) and 34 of docs/images, until test_docs.py found the dead links."""
     out = git('diff', '--name-status', old, new, '--', *VENDORED).splitlines()
     changes = []
     for line in out:
         parts = line.split('\t')
         kind, path = parts[0][0], parts[-1]
         changes.append((kind, path))
+    named = {p for _, p in changes}
+    for path in git('ls-tree', '-r', '--name-only', new, '--', *VENDORED).splitlines():
+        if path not in named and path not in OURS and not (REPO / path).exists():
+            changes.append(('A', path))
     return changes
 
 # ---- the fork's patches. Each is (name, already-marker, [(old, new), ...]); a patch whose
