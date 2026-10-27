@@ -295,6 +295,13 @@ final class BuildModel: ObservableObject {
     @Published var repoStatus = ""
     /// nil = not checked yet, 0 = up to date, n = n commits behind origin/main.
     @Published var repoBehind: Int?
+    /// Pull origin/main by itself when the app opens (Settings; on by default), so the build tools are the current ones:
+    /// a checkout days behind built with tools main had already fixed (spirv-cross without its x bit, #41).
+    @Published var autoUpdateRepo = UserDefaults.standard.object(forKey: "autoUpdateRepo") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(autoUpdateRepo, forKey: "autoUpdateRepo") }
+    }
+    /// The commits the automatic update brought when the app opened; the library's activity line names them. nil: none.
+    @Published var autoPulled: Int?
 
     nonisolated static func gitBinary() -> String? {
         for c in ["/usr/bin/git", "/opt/homebrew/bin/git", "/usr/local/bin/git"]
@@ -373,6 +380,7 @@ final class BuildModel: ObservableObject {
                 if behind >= 0 {
                     self.repoBehind = behind
                     if !silent { self.repoStatus = behind == 0 ? self.t("repo.upToDate") : String(format: self.t("repo.behind"), behind) }
+                    else if behind > 0 && self.autoUpdateRepo { self.autoPull(behind) }   // the check when the app opens
                 } else if !silent {
                     self.repoStatus = self.t("repo.netFail")
                 }
@@ -399,6 +407,38 @@ final class BuildModel: ObservableObject {
                 }
             }
         }
+    }
+
+    /// The automatic update when the app opens: a fast-forward to origin/main, only for a checkout on main with no changes
+    /// to its tracked files and no build running, so a checkout someone works in is never touched. Settings says what
+    /// happened (or why not), and the library's activity line names the new commits.
+    func autoPull(_ behind: Int) {
+        guard !running, !repoBusy, repoOK, repoIsGit, let git = Self.gitBinary() else { return }
+        repoBusy = true
+        let dir = repoPath
+        DispatchQueue.global().async {
+            let branch = Self.runQuiet([git, "-C", dir, "rev-parse", "--abbrev-ref", "HEAD"], env: Self.gitEnv())
+            let status = Self.runQuiet([git, "-C", dir, "status", "--porcelain", "--untracked-files=no"], env: Self.gitEnv())
+            let allowed = branch.ok && status.ok && Self.autoPullAllowed(branch: branch.out, status: status.out)
+            let pulled = allowed ? Self.runQuiet([git, "-C", dir, "pull", "--ff-only", "origin", "main"], env: Self.gitEnv()) : nil
+            DispatchQueue.main.async {
+                self.repoBusy = false
+                guard let pulled else { self.repoStatus = self.t("repo.autoSkipped"); return }
+                if pulled.ok {
+                    self.repoBehind = 0; self.autoPulled = behind
+                    self.repoStatus = String(format: self.t("repo.autoPulled"), behind)
+                } else {
+                    self.repoStatus = self.t("repo.pullFail")
+                    self.append(pulled.out + "\n")
+                }
+            }
+        }
+    }
+
+    /// A checkout the automatic update may move: on main, with no changes to tracked files (untracked files stay; a pull
+    /// that would overwrite one fails as a fast-forward and says so).
+    nonisolated static func autoPullAllowed(branch: String, status: String) -> Bool {
+        branch.trimmingCharacters(in: .whitespacesAndNewlines) == "main" && status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// A ZIP copy has no .git: adopt it into git in place (init, remote, fetch, checkout) so the
@@ -2207,6 +2247,12 @@ struct BuilderView: View {
             if m.repoOK, !m.repoIsGit {
                 Text(m.t("repo.noGit")).font(.manrope(12)).foregroundStyle(.secondary)
                     .padding(.horizontal, 18).padding(.bottom, 12)
+            }
+            if m.repoOK, m.repoIsGit {
+                divider
+                row(m.t("repo.auto"), detail: m.t("repo.autoNote")) {
+                    Toggle("", isOn: $m.autoUpdateRepo).labelsHidden().toggleStyle(LauncherSwitchStyle())
+                }
             }
             divider
             Button(action: { withAnimation(.easeInOut(duration: 0.18)) { m.toggleDeps() } }) {

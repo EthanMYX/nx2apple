@@ -455,6 +455,11 @@ struct ContentView: View {
                 } else {
                     Image(systemName: "desktopcomputer").foregroundStyle(.secondary)
                     Text(m.t("library.localNote")).font(.manrope(13)).foregroundStyle(.secondary)
+                    if let n = m.autoPulled, n > 0 {
+                        // The automatic update when the app opened (BuildModel.autoPull): the build tools are the current ones
+                        Circle().fill(LauncherPalette.ready).frame(width: 6, height: 6).padding(.leading, 10)
+                        Text(String(format: m.t("library.toolsUpdated"), n)).font(.manrope(13)).foregroundStyle(.secondary)
+                    }
                     Spacer()
                     if gamepad.connected {
                         // The buttons a controller has here, named as the game names them (A on the right)
