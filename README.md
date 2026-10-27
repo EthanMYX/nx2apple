@@ -116,6 +116,7 @@ game needs is [below](#games).
 
 | Game | Verified here | Notes |
 |---|---|---|
+| 2026-10-27 | v0.4.8 | **The Mac launcher becomes usable**: install an iPhone build on a paired device (#28), a controller drives the whole launcher (#56), launch options split into basic and advanced (#54) with Display mode and the render scale in real pixels (#55) and a Mods section through `DM_ROMFS_OVERLAY` (#57), keys and controller buttons remappable (#39); **the build tools update when the app opens** (#60) and **a new version says what it changes** before installing; fixes: every rewrite of every game crashed (`patch_nso.py`'s `TEXT_LO` used before assignment, #59), the Mac app refused every build with "requires Python 3.12" (#53), a ROMs folder holding several games could not build any of them (#58), a failed build pointed at a log that was off screen (#52), a Chinese Windows showed an English interface, CI could not open issues |
 | **Tears of the Kingdom** | ✅ | 304,243 files → 127 archive shards, byte-verified |
 | **Hades II** | ✅ | 33-file archive |
 | **Animal Crossing: New Horizons** | ✅ | 103,645 files → 72 shards, runs smoothly |
