@@ -54,4 +54,61 @@ final class UpdateSheetTests: XCTestCase {
         let bold = "**中文** 见 **NX2Apple** 的设置。"
         XCTAssertEqual(UpdateSheet.lines(bold, for: .zh), ["见 NX2Apple 的设置。"])
     }
+
+    // The format used from 0.4.8 on: English in full, `---`, Chinese in full.
+    private let twoHalves = """
+    ## What this release does
+
+    The launcher installs to a paired device.
+
+    ## Fixes
+
+    - Every rewrite crashed.
+
+    ---
+
+    ## 这一版做了什么
+
+    启动器可以装到配对设备。
+
+    ## 修复
+
+    - 每一次重写都会崩。
+    """
+
+    func testTheTwoHalvesFormatGivesEachReaderItsOwnHalf() {
+        let en = UpdateSheet.lines(twoHalves, for: .en)
+        let zh = UpdateSheet.lines(twoHalves, for: .zh)
+        XCTAssertTrue(en.contains { $0.contains("installs to a paired device") })
+        XCTAssertFalse(en.contains { $0.contains("启动器可以装到配对设备") }, "English half leaked: \(en)")
+        XCTAssertTrue(zh.contains { $0.contains("启动器可以装到配对设备") })
+        XCTAssertFalse(zh.contains { $0.contains("installs to a paired device") }, "Chinese half leaked: \(zh)")
+    }
+
+    func testTheTwoHalvesKeepTheirOwnHeadings() {
+        let en = UpdateSheet.lines(twoHalves, for: .en)
+        let zh = UpdateSheet.lines(twoHalves, for: .zh)
+        XCTAssertTrue(en.contains("What this release does"))
+        XCTAssertTrue(en.contains("Fixes"))
+        XCTAssertFalse(en.contains("这一版做了什么"))
+        XCTAssertTrue(zh.contains("这一版做了什么"))
+        XCTAssertTrue(zh.contains("修复"))
+        XCTAssertFalse(zh.contains("What this release does"))
+    }
+
+    func testAHalvesBodyWrittenChineseFirstStillReadsCorrectly() {
+        let flipped = """
+        ## 这一版做了什么
+
+        中文在前。
+
+        ---
+
+        ## What this release does
+
+        English second.
+        """
+        XCTAssertTrue(UpdateSheet.lines(flipped, for: .en).contains { $0.contains("English second") })
+        XCTAssertTrue(UpdateSheet.lines(flipped, for: .zh).contains { $0.contains("中文在前") })
+    }
 }

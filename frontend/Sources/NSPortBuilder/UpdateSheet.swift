@@ -12,7 +12,7 @@ struct UpdateSheet: View {
     @ObservedObject var m: BuildModel
     @Environment(\.dismiss) private var dismiss
 
-    private var update: (tag: String, url: String, notes: String)? { m.appUpdate }
+    private var update: AppUpdate.Release? { m.appUpdate }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -52,10 +52,13 @@ struct UpdateSheet: View {
                     .buttonStyle(LauncherSecondaryButtonStyle())
                     .keyboardShortcut(.cancelAction)
                 Button {
-                    m.performAppUpdate()
+                    // Automatic mode has already downloaded and staged the release, so the action is
+                    // to swap it in now; otherwise this downloads, verifies and installs as before.
+                    if m.appStaged != nil { m.installStagedUpdate(relaunch: true) } else { m.performAppUpdate() }
                     dismiss()
                 } label: {
-                    Text(m.t("update.now")).font(.manrope(13.5, .bold)).foregroundStyle(.black)
+                    Text(m.t(m.appStaged != nil ? "app.restartNow" : "update.now"))
+                        .font(.manrope(13.5, .bold)).foregroundStyle(.black)
                         .padding(.horizontal, 20).padding(.vertical, 9)
                         .background(LauncherPalette.cream, in: Capsule())
                 }
@@ -73,57 +76,72 @@ struct UpdateSheet: View {
 
     /// The release body's lines for one language.
     ///
-    /// The notes are written to a fixed shape (docs/RELEASE-NOTES-GUIDE.md): a bilingual heading
-    /// ("## 这一版做了什么 / What this release does"), then `**中文** …` and `**English** …` paragraphs,
-    /// then a bullet list that interleaves the two languages one item at a time. So the language is
-    /// known from the line's own marker, not from whether it happens to contain Chinese characters —
-    /// the first version of this did that and gave an English reader the Chinese paragraph, because
-    /// `**中文** …` contains both.
+    /// Two shapes are in the wild, both described in docs/RELEASE-NOTES-GUIDE.md:
+    ///
+    /// * **Current**: English written out in full, `---`, then Chinese in full. The `---` is the
+    ///   split, so the two halves are read straight through and neither reader sees the other's text.
+    /// * **Older releases (0.4.7 and before)**: `**中文** …` and `**English** …` paragraphs with the
+    ///   bullet lists interleaved one line each. Those are split on the markers.
+    ///
+    /// A body with neither is shown whole — splitting it by guesswork is how the first version gave
+    /// an English reader the Chinese paragraph (that line contains both scripts).
     static func lines(_ notes: String, for lang: Lang) -> [String] {
+        // Shape 1: two halves around a `---` line.
+        let halves = notes.components(separatedBy: "\n---\n")
+        if halves.count == 2 {
+            let first = clean(halves[0]), second = clean(halves[1])
+            // The English half first, as the guide requires; pick by which half is which, not by order
+            // alone, so a body written the other way round still reads correctly.
+            let firstIsEnglish = !containsHan(first.joined())
+            let english = firstIsEnglish ? first : second
+            let chinese = firstIsEnglish ? second : first
+            if !english.isEmpty && !chinese.isEmpty { return lang == .zh ? chinese : english }
+        }
+
+        // Shape 2: `**中文**` / `**English**` markers.
         var zh: [String] = [], en: [String] = []
-        // Headings go to both lists, so "one list is empty" is not the test for a bilingual body —
-        // a monolingual body with a heading fills both. Count the tagged and bulleted lines instead.
-        var bilingual = 0
+        var marked = 0
         for raw in notes.split(separator: "\n", omittingEmptySubsequences: false) {
             var s = raw.trimmingCharacters(in: .whitespaces)
             if s.isEmpty || s.hasPrefix("---") { continue }
-            if s.hasPrefix("#") {                              // a heading: keep it once, in either list
+            if s.hasPrefix("#") {
                 while s.hasPrefix("#") { s.removeFirst() }
                 s = s.trimmingCharacters(in: .whitespaces)
                 if !s.isEmpty { zh.append(s); en.append(s) }
                 continue
             }
-            // `**中文** …` / `**English** …` — the marker decides, and it is removed from the text
             if let r = s.range(of: "**中文**") {
-                bilingual += 1
+                marked += 1
                 zh.append(s[r.upperBound...].replacingOccurrences(of: "**", with: "").trimmingCharacters(in: .whitespaces))
             } else if let r = s.range(of: "**English**") {
-                bilingual += 1
+                marked += 1
                 en.append(s[r.upperBound...].replacingOccurrences(of: "**", with: "").trimmingCharacters(in: .whitespaces))
             } else {
-                // A bullet or plain line: no marker, so it belongs to whichever language it is in.
-                // Chinese text has Han characters; English does not. (A bullet naming a title in
-                // Chinese would land in the Chinese list, which is the right place for it.)
                 s = s.replacingOccurrences(of: "**", with: "")
-                if s.range(of: "\u{4e00}", options: []) != nil || s.unicodeScalars.contains(where: { (0x4e00...0x9fff).contains($0.value) }) {
-                    zh.append(s)
-                } else { en.append(s) }
+                if containsHan(s) { zh.append(s) } else { en.append(s) }
             }
         }
-        // A body with no language markers at all is shown whole: splitting it would silently drop
-        // half of it, which is what the first version did to a plain English body.
-        if bilingual == 0 || zh.isEmpty || en.isEmpty {
-            var all: [String] = []
-            for raw in notes.split(separator: "\n", omittingEmptySubsequences: false) {
-                var s = raw.trimmingCharacters(in: .whitespaces)
-                if s.isEmpty || s.hasPrefix("---") { continue }
-                while s.hasPrefix("#") { s.removeFirst() }
-                s = s.replacingOccurrences(of: "**中文**", with: "").replacingOccurrences(of: "**English**", with: "")
-                s = s.replacingOccurrences(of: "**", with: "").trimmingCharacters(in: .whitespaces)
-                if !s.isEmpty { all.append(s) }
-            }
-            return all
+        if marked > 0, !zh.isEmpty, !en.isEmpty { return lang == .zh ? zh : en }
+
+        // Neither shape: show it as it is.
+        return clean(notes)
+    }
+
+    /// One half of a body as display lines: heading marks and bold marks stripped, blanks dropped.
+    private static func clean(_ half: String) -> [String] {
+        half.split(separator: "\n", omittingEmptySubsequences: false).compactMap { raw in
+            var s = raw.trimmingCharacters(in: .whitespaces)
+            if s.isEmpty || s.hasPrefix("---") { return nil }
+            while s.hasPrefix("#") { s.removeFirst() }
+            s = s.replacingOccurrences(of: "**中文**", with: "")
+                 .replacingOccurrences(of: "**English**", with: "")
+                 .replacingOccurrences(of: "**", with: "")
+                 .trimmingCharacters(in: .whitespaces)
+            return s.isEmpty ? nil : s
         }
-        return lang == .zh ? zh : en
+    }
+
+    private static func containsHan(_ s: String) -> Bool {
+        s.unicodeScalars.contains { (0x4e00...0x9fff).contains($0.value) }
     }
 }

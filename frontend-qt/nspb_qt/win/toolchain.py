@@ -437,7 +437,7 @@ def clang_compiles(clang: Path) -> tuple[bool, str]:
     directory only, which is the capability every later step depends on. Same shape of probe
     that was green on the machine where --version failed.
     """
-    with tempfile.TemporaryDirectory(prefix='nspb-clang-') as td:
+    with ascii_temp_dir('nspb-clang-') as td:
         c = Path(td) / 'probe.c'
         o = Path(td) / 'probe.o'
         c.write_text('int dm_clang_probe(void) { return 42; }\n', encoding='utf-8')
@@ -760,6 +760,25 @@ def find_exe(name: str) -> Path | None:
     for cand in (f'{name}.exe', name):
         if w := shutil.which(cand):
             return Path(w)
+    # The Vulkan SDK does not put Bin on PATH, and asking the user to write a JSON path was the
+    # old answer to that — unusable for someone who just installed the SDK. Its layout is fixed:
+    # %VULKAN_SDK%\Bin, else C:\VulkanSDK\<version>\Bin, newest first.
+    if name in ('spirv-cross', 'glslangValidator'):
+        roots = [os.environ.get('VULKAN_SDK', '')]
+        base = Path(os.environ.get('ProgramFiles', r'C:\Program Files')) / 'VulkanSDK'
+        if base.is_dir():
+            try:
+                roots += [str(base / v) for v in sorted((d.name for d in base.iterdir() if d.is_dir()),
+                                                        key=lambda s: [int(x) for x in re.findall(r'\d+', s)] or [0],
+                                                        reverse=True)]
+            except OSError:
+                pass
+        for root in roots:
+            if not root:
+                continue
+            for cand in (Path(root) / 'Bin' / f'{name}.exe', Path(root) / f'{name}.exe'):
+                if cand.is_file():
+                    return cand
     return None
 
 
@@ -799,7 +818,7 @@ def probe_compile(sdk: Path, clang: Path | None = None) -> tuple[bool, str]:
     if not clang:
         return False, 'no clang.exe'
     src = '#import <Foundation/Foundation.h>\nint dm_probe(void) { return 42; }\n'
-    with tempfile.TemporaryDirectory(prefix='nspb-probe-') as td:
+    with ascii_temp_dir('nspb-probe-') as td:
         c = Path(td) / 'probe.m'
         o = Path(td) / 'probe.o'
         c.write_text(src, encoding='utf-8')
@@ -830,6 +849,49 @@ def probe_compile(sdk: Path, clang: Path | None = None) -> tuple[bool, str]:
         return True, f'arm64 Mach-O object, {o.stat().st_size} bytes'
 
 
+def ascii_temp_dir(prefix: str = 'nspb-'):
+    """A temporary directory whose path is pure ASCII, for tools that cannot open anything else.
+
+    Apple's Windows ports of metal.exe and metallib.exe (LLVM-based) fail with
+    "LLVM ERROR: Error opening '<path>'" when the path holds characters outside ASCII, and on a
+    Chinese Windows the default TEMP is C:\\Users\\<中文名>\\AppData\\Local\\Temp — so the Metal
+    probe failed on a machine where the toolchain was installed correctly (the report's two
+    screenshots: everything green, Metal Toolchain found, then "metallib failed: LLVM ERROR").
+    clang and ld64.lld handle the same path fine, which is why only this probe broke.
+
+    Order: the normal TEMP when it is ASCII (the common case), then the public temp folder, then
+    the drive root. The caller gets a TemporaryDirectory that it must keep open for the tool's
+    lifetime; the fallbacks are only used when the default really cannot work.
+    """
+    import tempfile as _tf
+    def ok(p: str) -> bool:
+        try:
+            p.encode('ascii')
+            return True
+        except UnicodeEncodeError:
+            return False
+    candidates = [tempfile.gettempdir()]
+    if os.name == 'nt':
+        candidates += [os.environ.get('PUBLIC', r'C:\Users\Public') + r'\Temp', r'C:\Windows\Temp', 'C:\\Temp']
+    for base in candidates:
+        if not base or not ok(base):
+            continue
+        try:
+            Path(base).mkdir(parents=True, exist_ok=True)
+            return _tf.TemporaryDirectory(prefix=prefix, dir=base)
+        except OSError:
+            continue
+    # Nothing ASCII is writable: fall back to the default (created first — the caller may be on a
+    # system where gettempdir() names a folder that does not exist yet) and let the tool say what
+    # it says.
+    default = tempfile.gettempdir()
+    try:
+        Path(default).mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    return _tf.TemporaryDirectory(prefix=prefix, dir=default)
+
+
 def probe_metal(sdk: Path) -> tuple[bool, str]:
     """Compile a trivial MSL shader to AIR and then to a .metallib with the Windows tools."""
     metal = metal_tool('metal')
@@ -838,7 +900,7 @@ def probe_metal(sdk: Path) -> tuple[bool, str]:
         return False, 'metal.exe and metallib.exe are not both present'
     src = ('#include <metal_stdlib>\nusing namespace metal;\n'
            'vertex float4 dm_probe_v(uint vid [[vertex_id]]) { return float4(0, 0, 0, 1); }\n')
-    with tempfile.TemporaryDirectory(prefix='nspb-metal-') as td:
+    with ascii_temp_dir('nspb-metal-') as td:
         m = Path(td) / 'probe.metal'
         a = Path(td) / 'probe.air'
         lib = Path(td) / 'probe.metallib'
@@ -874,7 +936,7 @@ def probe_link(sdk: Path) -> tuple[bool, str]:
     if not lld:
         return False, note or 'no ld64.lld'
     src = '#include <stdio.h>\nint main(void) { puts("probe"); return 0; }\n'
-    with tempfile.TemporaryDirectory(prefix='nspb-link-') as td:
+    with ascii_temp_dir('nspb-link-') as td:
         c = Path(td) / 'probe.c'
         out = Path(td) / 'probe'
         c.write_text(src, encoding='utf-8')
@@ -1037,7 +1099,7 @@ def check_all(deep: bool = False) -> list[Probe]:
 
     # ---- the rest of the toolchain
     for name, label, hint, req in (
-            ('spirv-cross', 'spirv-cross', 'Vulkan SDK for Windows (vulkan.lunarg.com), or a GitHub release', True),
+            ('spirv-cross', 'spirv-cross', 'Vulkan SDK for Windows (vulkan.lunarg.com), or a GitHub release', False),
             ('zstd', 'zstd', 'github.com/facebook/zstd/releases (zstd-*-win64.zip)', True),
             ('glslangValidator', 'glslangValidator', 'only OpenGL games need it (Vulkan SDK ships it)', False)):
         p = find_exe(name)

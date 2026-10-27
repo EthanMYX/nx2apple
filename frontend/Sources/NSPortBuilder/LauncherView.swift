@@ -34,17 +34,22 @@ struct ContentView: View {
     @State private var launchError: String?
     @State private var removing: LibraryGame?
     @State private var optionsFor: UUID?
+    @State private var freeSpaceFor: UUID?   // the game whose Free space sheet is open
     @State private var controlsOpen = false
+    @State private var savesFor: UUID?   // the game whose Saves sheet is open (SaveTransfer.swift)
     @StateObject private var controls = ControlLayout()
     @StateObject private var gamepad = LauncherGamepad()
     @StateObject private var padFocus = PadFocus()
     @StateObject private var row = RowScroller()
+    @StateObject private var toolsAge: ToolsAge
+    @State private var buildCommit = ""   // the checkout's commit when the running build started (ToolsAge)
     private var performStartupChecks: Bool
     @Environment(\.scenePhase) private var scenePhase
 
     init(model: BuildModel? = nil, library: GameLibrary? = nil, initialPage: LauncherPage = .library,
-         activeBuildID: UUID? = nil, performStartupChecks: Bool = true, search: String? = nil) {
+         activeBuildID: UUID? = nil, performStartupChecks: Bool = true, search: String? = nil, olderTools: Set<UUID> = []) {
         if let search { _search = State(initialValue: search); _searching = State(initialValue: true) }   // visual QA: the bar with its field open
+        _toolsAge = StateObject(wrappedValue: ToolsAge(older: olderTools))   // visual QA: games marked without a checkout to compare
         _m = StateObject(wrappedValue: model ?? BuildModel())
         _library = StateObject(wrappedValue: library ?? GameLibrary())
         _page = State(initialValue: initialPage)
@@ -82,20 +87,37 @@ struct ContentView: View {
         .onAppear {
             gamepad.perform = padAction
             refreshArtwork()
-            if performStartupChecks { library.discover(); fetchArtwork(); m.refreshDevices() }
+            if performStartupChecks { library.discover(); fetchArtwork(); m.refreshDevices(); checkTools() }
             if performStartupChecks {
                 m.checkDeps()
                 if m.repoOK && m.repoIsGit { m.checkRepoUpdates(silent: true) }
                 m.checkAppUpdate(silent: true)
+                BuildNotifier.shared.watch(m, library: library)   // BuildNotifications.swift
             }
+        }
+        .onReceive(BuildNotifier.shared.$route) { route in   // a clicked build notification
+            guard let route else { return }
+            page = route.page
+            if let id = route.game { library.selectedID = id }
+            DispatchQueue.main.async { BuildNotifier.shared.route = nil }
         }
         .onChange(of: library.games) { _ in
             refreshArtwork()
             if performStartupChecks { fetchArtwork() }
         }
-        .onChange(of: m.repoPath) { _ in refreshArtwork() }
+        .onChange(of: m.repoPath) { _ in refreshArtwork(); if performStartupChecks { checkTools() } }
+        // A clone, pull or update check has finished (the automatic pull at launch among them): the checkout may have moved
+        .onReceive(m.$repoBusy.removeDuplicates().dropFirst()) { busy in if !busy && performStartupChecks { checkTools() } }
         .onReceive(m.$running.removeDuplicates()) { running in
             if running && activeBuildID == nil { activeBuildID = library.rememberInputs(m) }
+            if running && activeBuildID != nil {   // the tools this build runs: a pull waits for the build (pullRepo, autoPull)
+                buildCommit = ""
+                let repo = m.repoPath
+                DispatchQueue.global(qos: .utility).async {
+                    let commit = ToolsAge.head(repo: repo) ?? ""
+                    DispatchQueue.main.async { buildCommit = commit }
+                }
+            }
             if !running {
                 DispatchQueue.main.async {
                     if m.done { recordBuild() }
@@ -127,7 +149,15 @@ struct ContentView: View {
             if let id = optionsFor { LaunchOptionsView(m: m, library: library, gameID: id).environmentObject(padFocus) }
         }
         .sheet(isPresented: $controlsOpen) { ControlsView(m: m, layout: controls).environmentObject(padFocus) }
+        .sheet(isPresented: Binding(get: { freeSpaceFor != nil }, set: { if !$0 { freeSpaceFor = nil } })) {
+            if let game = library.games.first(where: { $0.id == freeSpaceFor }) { FreeSpaceView(m: m, game: game).environmentObject(padFocus) }
+        }
+        .onChange(of: freeSpaceFor) { id in padFocus.scope = id != nil ? "free" : "main" }
         .sheet(isPresented: $m.showUpdateSheet) { UpdateSheet(m: m) }
+        .sheet(isPresented: Binding(get: { savesFor != nil }, set: { if !$0 { savesFor = nil } })) {
+            if let id = savesFor { SavesView(m: m, library: library, gameID: id).environmentObject(padFocus) }
+        }
+        .onChange(of: savesFor) { id in padFocus.scope = id != nil ? "saves" : "main" }
         .onChange(of: optionsFor) { id in padFocus.scope = id != nil ? "launch" : (controlsOpen ? "controls" : "main") }
         .onChange(of: controlsOpen) { open in padFocus.scope = open ? "controls" : (optionsFor != nil ? "launch" : "main") }
         .onChange(of: page) { _ in padFocus.focused = nil }
@@ -217,6 +247,9 @@ struct ContentView: View {
         withAnimation(.easeOut(duration: 0.2)) { searching = false }
     }
 
+    /// The collection row's measured height (CollectionHeightKey); the hero above it takes the rest of the page.
+    @State private var collectionHeight: CGFloat = 274
+
     private var libraryPage: some View {
         GeometryReader { geometry in
             if library.games.isEmpty {
@@ -225,11 +258,15 @@ struct ContentView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         if let game = library.selected {
-                            hero(game, width: geometry.size.width, height: max(240, geometry.size.height - 274))
+                            hero(game, width: geometry.size.width, height: max(240, geometry.size.height - collectionHeight))
                         }
+                        // The hero takes what the collection leaves: the row's height grows with the window's width (its cards
+                        // do, up to 300 pt), so a fixed share left a fullscreen window's cards cut off at the bottom
                         collection(width: geometry.size.width)
+                            .background(GeometryReader { g in Color.clear.preference(key: CollectionHeightKey.self, value: g.size.height) })
                     }
                 }
+                .onPreferenceChange(CollectionHeightKey.self) { h in if h > 0, abs(h - collectionHeight) > 0.5 { collectionHeight = h } }
             }
         }
     }
@@ -276,7 +313,21 @@ struct ContentView: View {
                            startPoint: .top, endPoint: .bottom)
             LinearGradient(colors: [.black.opacity(0.24), .clear], startPoint: .leading, endPoint: .trailing)
             VStack(alignment: .leading, spacing: 14) {
-                status(game, prominent: true)
+                HStack(spacing: 14) {
+                    status(game, prominent: true)
+                    if toolsAge.older.contains(game.id) && !(m.running && activeBuildID == game.id) {
+                        Button { configureBuild(game) } label: {
+                            Label(m.t("library.rebuildShort"), systemImage: "arrow.clockwise")
+                                .font(.manrope(12, .semibold)).foregroundStyle(LauncherPalette.cream)
+                                .padding(.horizontal, 10).padding(.vertical, 4)
+                                .overlay(Capsule().strokeBorder(LauncherPalette.cream.opacity(0.35)))
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain).disabled(m.running || game.inputs["base", default: []].isEmpty)
+                        .help(m.t("library.olderToolsHelp"))
+                        .padTarget("hero.rebuild", scope: "main", radius: 12) { if !m.running { configureBuild(game) } }
+                    }
+                }
                 Text(game.name).font(.manrope(min(68, width * 0.052), .heavy))
                     .tracking(-1.6).lineLimit(2).shadow(color: .black.opacity(0.25), radius: 12)
                 HStack(spacing: 18) {
@@ -304,8 +355,9 @@ struct ContentView: View {
                         .padTarget("hero.options", scope: "main", radius: 24) { optionsFor = game.id }
                     }
                     Menu {
-                        Button(m.t("library.buildAgain")) { configureBuild(game) }.disabled(m.running || game.inputs["base", default: []].isEmpty)
+                        Button(m.t(toolsAge.older.contains(game.id) ? "library.rebuild" : "library.buildAgain")) { configureBuild(game) }.disabled(m.running || game.inputs["base", default: []].isEmpty)
                         if game.isReady { Button(m.t("launch.title")) { optionsFor = game.id } }
+                        Button(m.t("saves.menu")) { savesFor = game.id }
                         Button(m.t("library.changeArtwork")) { chooseArtwork(game) }
                         if !game.artworkPath.isEmpty {
                             Button(m.t("library.resetArtwork")) { library.setArtwork("", for: game.id) }
@@ -315,6 +367,7 @@ struct ContentView: View {
                                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: game.appPath)])
                             }
                         }
+                        if BuildFolder.location(for: game) != nil { Button(m.t("free.menu")) { freeSpaceFor = game.id } }
                         Divider()
                         Button(m.t("library.remove"), role: .destructive) { removing = game }.disabled(game.id == activeBuildID)
                     } label: {
@@ -426,6 +479,11 @@ struct ContentView: View {
                 .font(prominent ? .manrope(12, .bold) : .manrope(13, .medium))
                 .tracking(prominent ? 1.3 : 0)   // the eyebrow: the same face, in tracked capitals
                 .foregroundStyle(color)
+            if !building && toolsAge.older.contains(game.id) {   // a quiet note beside the status, not a warning
+                Text("· " + m.t(prominent ? "library.olderTools" : "library.olderToolsShort"))
+                    .font(.manrope(prominent ? 13 : 12)).foregroundStyle(.secondary).lineLimit(1)
+                    .help(m.t("library.olderToolsHelp"))
+            }
         }
         .accessibilityElement(children: .combine)
     }
@@ -462,10 +520,20 @@ struct ContentView: View {
                         Text(String(format: m.t("library.toolsUpdated"), n)).font(.manrope(13)).foregroundStyle(.secondary)
                     }
                     Spacer()
+                    if let staged = m.appStaged {
+                        // A downloaded, verified update (BuildModel.stageAppUpdate): it goes in when the app quits, or now.
+                        // This branch only shows with no build running, and restartToUpdate checks again.
+                        HStack(spacing: 10) {
+                            Circle().fill(LauncherPalette.ready).frame(width: 6, height: 6)
+                            Text(String(format: m.t("library.appReady"), staged.release.tag)).font(.manrope(13)).foregroundStyle(.secondary)
+                        }
+                        Button(m.t("app.restartNow")) { m.restartToUpdate() }.buttonStyle(LauncherSecondaryButtonStyle())
+                    }
                     if gamepad.connected {
                         // The buttons a controller has here, named as the game names them (A on the right)
                         HStack(spacing: 18) {
                             padHint("A", m.t("pad.play")); padHint("X", m.t("pad.options")); padHint("B", m.t("pad.back"))
+                            padHint("Y", m.t("pad.saves"))
                             Image(systemName: "gamecontroller").foregroundStyle(.secondary)
                         }
                     }
@@ -514,7 +582,10 @@ struct ContentView: View {
     /// then the D-pad moves it (PadFocus), A activates, B closes a sheet or goes back to the library, X opens the selected
     /// game's launch options, L and R switch the pages.
     private func padAction(_ action: LauncherGamepad.Action) {
-        let sheetOpen = optionsFor != nil || controlsOpen
+        let sheetOpen = optionsFor != nil || controlsOpen || savesFor != nil || freeSpaceFor != nil
+        if action == .b, savesFor != nil { savesFor = nil; return }
+        // The Free space sheet: B closes it, the D-pad and A work in it, X, L and R do nothing behind it
+        if freeSpaceFor != nil && [.b, .x, .l, .r].contains(action) { if action == .b { freeSpaceFor = nil }; return }
         if action == .b {
             if optionsFor != nil { optionsFor = nil } else if controlsOpen { controlsOpen = false }
             else if searching { searching = false; search = "" } else if page != .library { page = .library }
@@ -537,7 +608,9 @@ struct ContentView: View {
             guard !sheetOpen, let at = LauncherPage.allCases.firstIndex(of: page) else { return }
             let pages = LauncherPage.allCases
             page = pages[(at + (action == .l ? pages.count - 1 : 1)) % pages.count]
-        case .b, .y:
+        case .y:   // the selected game's saves: the Manage menu is AppKit's, which a controller cannot open
+            if !sheetOpen, let game = library.selected { savesFor = game.id }
+        case .b:
             return
         }
     }
@@ -582,10 +655,13 @@ struct ContentView: View {
 
     private func recordBuild() {
         guard m.done, let id = activeBuildID else { return }
-        if m.target == "mac-app" { library.recordCompletedApp(path: m.macAppPath, for: id) }
-        else { library.recordCompletedIOS(ipa: m.ipaPath, archive: m.archivePath, app: m.installedAppPath, device: m.installedOn, for: id) }
+        if m.target == "mac-app" { library.recordCompletedApp(path: m.macAppPath, commit: buildCommit, for: id) }
+        else { library.recordCompletedIOS(ipa: m.ipaPath, archive: m.archivePath, app: m.installedAppPath, device: m.installedOn, commit: buildCommit, for: id) }
         refreshArtwork()
+        if performStartupChecks { checkTools() }
     }
+
+    private func checkTools() { toolsAge.check(games: library.games, repo: m.repoPath) }
 
     private func refreshArtwork() {
         artwork = Dictionary(uniqueKeysWithValues: library.games.compactMap { game in
@@ -688,4 +764,10 @@ private struct EnclosingScrollView: NSViewRepresentable {
         probe.row = row
         DispatchQueue.main.async { if let view = probe.enclosingScrollView { row.attach(view) } }
     }
+}
+
+/// The library's collection row reports its height, so the hero above it fills exactly what is left.
+private struct CollectionHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }

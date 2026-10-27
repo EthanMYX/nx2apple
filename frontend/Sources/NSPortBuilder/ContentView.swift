@@ -218,6 +218,12 @@ final class BuildModel: ObservableObject {
         groupsLock.lock(); groups.remove(p.processIdentifier); groupsLock.unlock()
     }
 
+    /// A build's process group is still running (the app update waits for it: its relaunch would end the build).
+    static var buildProcessesAlive: Bool {
+        groupsLock.lock(); defer { groupsLock.unlock() }
+        return groups.contains { killpg($0, 0) == 0 }
+    }
+
     /// SIGTERM to every process of the group, SIGKILL 5 s later to whatever is left of it.
     nonisolated static func endGroup(_ leader: pid_t) {
         guard leader > 1 else { return }
@@ -473,18 +479,41 @@ final class BuildModel: ObservableObject {
     }
 
     // ---- App self-update (GitHub Releases) ----
+    // The rules (what is verified, which copies replace themselves, never during a build) are in AppUpdate.swift.
 
     /// Bump together with each release tag; the update check compares it with the latest release.
     static let appVersion = "0.4.8"
-    /// The update found by checkAppUpdate: its tag, the asset to download, and the release notes the
-    /// sheet shows. The notes are why the sheet exists — "update available" alone told a user nothing
-    /// about what they would get (the 0.4.x releases each changed a lot).
-    @Published var appUpdate: (tag: String, url: String, notes: String)?
+    /// The update checkAppUpdate found: the tag, the asset to download, its digest, and the release
+    /// notes the sheet shows. The notes are why the sheet exists — "update available" alone told a
+    /// user nothing about what they would get.
+    @Published var appUpdate: AppUpdate.Release?
     @Published var appBusy = false
     /// Whether the "a new version is out" sheet is up: opened by the launch check and by Check for
     /// updates, so a user learns what changed before deciding, not after downloading.
     @Published var showUpdateSheet = false
     @Published var appStatus = ""
+    /// Download a new release by itself and install it when the app quits (Settings; on by default). Off, the
+    /// Update button in Settings works as before: download, swap in, relaunch.
+    @Published var autoUpdateApp = UserDefaults.standard.object(forKey: "autoUpdateApp") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(autoUpdateApp, forKey: "autoUpdateApp")
+            if autoUpdateApp, appStaged == nil, let u = appUpdate { stageAppUpdate(u, automatic: true) }
+        }
+    }
+    /// The release that is downloaded, verified and unpacked: it goes in when the app quits, or with Restart now.
+    @Published var appStaged: AppUpdate.Staged?
+    /// Where a rename-era install put the new app (the old bundle name is gone): Settings shows it,
+    /// because the Dock entry pointing at the old path is stale until the player re-pins it.
+    static var noteRenamedInstall: String?
+    /// Whether this copy may replace itself; a launcher built from the repository never does (tests set it).
+    var appInstallability = AppUpdate.installability(Bundle.main.bundleURL, appVersion: BuildModel.appVersion)
+    private var quitObserver: NSObjectProtocol?
+
+    /// The download names this build accepts, newest first. Every release must carry at least one of
+    /// them or an install from that era cannot update itself: NX2Apple is current, nxnative is for
+    /// installs from before the rename to NX2Apple, NS-Port-Builder for installs before that.
+    nonisolated static let appAssetNames = ["NX2Apple-macOS-arm64.zip", "nxnative-macOS-arm64.zip",
+                                           "NS-Port-Builder-macOS-arm64.zip"]
 
     nonisolated static func isNewer(_ tag: String, than current: String) -> Bool {
         func nums(_ s: String) -> [Int] { s.split(separator: ".").map { Int($0.filter { $0.isNumber }) ?? 0 } }
@@ -496,99 +525,217 @@ final class BuildModel: ObservableObject {
         return false
     }
 
+    /// The release's asset this app installs, with its digest: NX2Apple-macOS-arm64.zip, or the zip under an older
+    /// name (releases from before each rename).
+    nonisolated static func appRelease(fromJSON obj: [String: Any]) -> AppUpdate.Release? {
+        let tag = obj["tag_name"] as? String ?? ""
+        guard let assets = obj["assets"] as? [[String: Any]] else { return nil }
+        for name in ["NX2Apple-macOS-arm64.zip", "nxnative-macOS-arm64.zip", "NS-Port-Builder-macOS-arm64.zip"] {
+            for a in assets where (a["name"] as? String) == name {
+                if let u = a["browser_download_url"] as? String { return AppUpdate.Release(tag: tag, url: u, digest: a["digest"] as? String) }
+            }
+        }
+        return nil
+    }
+
     /// Ask GitHub for the latest release. `silent` (the launch check) only surfaces a found update;
     /// "up to date" and network failures stay quiet. A slow or blocked network just times out.
+    /// With automatic updates on, a found release is downloaded and staged in the background.
     func checkAppUpdate(silent: Bool = false) {
         guard !appBusy else { return }
         appBusy = true
         if !silent { appStatus = t("app.checking") }
         URLSession.shared.dataTask(with: URL(string: "https://api.github.com/repos/LNPANDY/NX2Apple/releases/latest")!) { data, _, _ in
-            var found: (String, String, String)?
+            var found: AppUpdate.Release?
+            // A newer release whose download this build cannot name is NOT "up to date". That
+            // distinction is the difference between a user who updates and one who sits on 0.4.6
+            // for ever: 0.4.6 and 0.4.7 look for exactly "NS-Port-Builder-macOS-arm64.zip", and if a
+            // release ever ships without that name they report "已是最新" and stop.
+            var newerTag: String?
             if let d = data, let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
                 let tag = obj["tag_name"] as? String ?? ""
-                if Self.isNewer(tag, than: Self.appVersion),
-                   let assets = obj["assets"] as? [[String: Any]] {
-                    // nxnative-macOS-arm64.zip; releases from before the rename name it NS-Port-Builder-macOS-arm64.zip
-                    let notes = (obj["body"] as? String) ?? ""
-                    for name in ["NX2Apple-macOS-arm64.zip", "nxnative-macOS-arm64.zip", "NS-Port-Builder-macOS-arm64.zip"] where found == nil {
-                        for a in assets where (a["name"] as? String) == name {
-                            if let u = a["browser_download_url"] as? String { found = (tag, u, notes) }
-                        }
+                if Self.isNewer(tag, than: Self.appVersion) {
+                    newerTag = tag
+                    if var r = Self.appRelease(fromJSON: obj) {
+                        r.notes = (obj["body"] as? String) ?? ""
+                        found = r
                     }
                 }
             }
             DispatchQueue.main.async {
                 self.appBusy = false
                 if let f = found {
-                    self.appUpdate = (tag: f.0, url: f.1, notes: f.2)
-                    self.appStatus = String(format: self.t("app.found"), f.0)
-                    self.showUpdateSheet = true      // the sheet names what the new version does
+                    self.appUpdate = f
+                    switch self.appInstallability {
+                    case .developer: self.appStatus = String(format: self.t("app.devBuild"), f.tag)
+                    case .readOnly: self.appStatus = String(format: self.t("app.readOnly"), f.tag)
+                    case .ok:
+                        if self.appStaged?.release == f { self.appStatus = String(format: self.t("app.ready"), f.tag) }
+                        else if self.autoUpdateApp { self.stageAppUpdate(f, automatic: true) }
+                        else { self.appStatus = String(format: self.t("app.found"), f.tag) }
+                        // The sheet opens either way: it is the only place the release notes appear,
+                        // and "a new version is out" without saying what changed is what made people
+                        // press Update blindly or not at all. In automatic mode it is also where
+                        // Restart now lives, and it says the download is already running.
+                        self.showUpdateSheet = true
+                    }
                 } else if !silent {
-                    self.appStatus = data == nil ? self.t("app.netFail") : self.t("app.upToDate")
+                    if data == nil {
+                        self.appStatus = self.t("app.netFail")
+                    } else if let tag = newerTag {
+                        // The release exists; this app just cannot find its own asset name in it.
+                        self.appStatus = String(format: self.t("app.noAsset"), tag)
+                        self.appUpdate = nil
+                    } else {
+                        self.appStatus = self.t("app.upToDate")
+                    }
                 }
             }
         }.resume()
     }
 
-    /// Download the new release, unzip it beside the running app, swap it in and relaunch. The old
-    /// bundle goes to the Trash; a failure at any step leaves the current app running.
-    func performAppUpdate() {
-        guard let upd = appUpdate, let url = URL(string: upd.url), !appBusy else { return }
-        appBusy = true; appStatus = t("app.downloading")
+    /// Download the release, check it against its digest, unpack it and check the app inside, all in the background;
+    /// the result waits in appStaged. `automatic` (the switch) refuses a release whose digest GitHub did not give;
+    /// the Update button accepts it, as before. `then` gets the staged copy (the button installs it at once).
+    func stageAppUpdate(_ release: AppUpdate.Release, automatic: Bool, then: ((AppUpdate.Staged) -> Void)? = nil) {
+        guard !appBusy, appInstallability == .ok, let url = URL(string: release.url) else { return }
+        appBusy = true
+        appStatus = String(format: t(automatic ? "app.staging" : "app.downloading"), release.tag)
+        let expectedID = Bundle.main.bundleIdentifier ?? ""
         DispatchQueue.global().async {
-            let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("nspb-update.zip")
-            try? FileManager.default.removeItem(at: tmp)
-            let sem = DispatchSemaphore(value: 0)
-            URLSession.shared.downloadTask(with: url) { local, _, _ in
-                if let local = local { try? FileManager.default.moveItem(at: local, to: tmp) }
-                sem.signal()
-            }.resume()
-            sem.wait()
-            guard FileManager.default.fileExists(atPath: tmp.path) else {
-                DispatchQueue.main.async { self.appBusy = false; self.appStatus = self.t("app.netFail") }
-                return
-            }
-            DispatchQueue.main.async { self.appStatus = self.t("app.installing") }
-            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("nspb-update", isDirectory: true)
-            try? FileManager.default.removeItem(at: dir)
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let unzip = Process()
-            unzip.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-            unzip.arguments = ["-x", "-k", tmp.path, dir.path]
-            try? unzip.run(); unzip.waitUntilExit()
-            // The archive holds one app: nxnative.app, or NS Port Builder.app in a release from before the rename
-            let newApp = ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [])
-                .first { $0.pathExtension == "app" } ?? dir.appendingPathComponent("NX2Apple.app")
-            guard unzip.terminationStatus == 0, FileManager.default.fileExists(atPath: newApp.path) else {
-                DispatchQueue.main.async { self.appBusy = false; self.appStatus = self.t("app.netFail") }
-                return
-            }
-            // Copy the new bundle in beside the running one first: from there on every step is a
-            // same-volume move, and a failure anywhere leaves a working app on disk.
-            let cur = Bundle.main.bundleURL
-            let staging = cur.deletingLastPathComponent().appendingPathComponent("NX2Apple (new).app")
-            try? FileManager.default.removeItem(at: staging)
-            do {
-                try FileManager.default.copyItem(at: newApp, to: staging)
-                var trash: NSURL?
-                try FileManager.default.trashItem(at: cur, resultingItemURL: &trash)
-                try FileManager.default.moveItem(at: staging, to: cur)
-            } catch {
-                DispatchQueue.main.async {
-                    self.appBusy = false
-                    self.appStatus = String(format: self.t("app.installFail"), error.localizedDescription)
-                }
-                return
-            }
-            let x = Process()   // no Gatekeeper prompt on the swapped-in copy's first launch
-            x.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
-            x.arguments = ["-dr", "com.apple.quarantine", cur.path]
-            try? x.run(); x.waitUntilExit()
+            let result = Self.downloadAndStage(release, from: url, expectedID: expectedID, requireDigest: automatic)
             DispatchQueue.main.async {
-                self.appStatus = String(format: self.t("app.relaunching"), upd.tag)
-                NSWorkspace.shared.openApplication(at: cur, configuration: NSWorkspace.OpenConfiguration())
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { exit(0) }
+                self.appBusy = false
+                switch result {
+                case .success(let staged):
+                    self.appStaged = staged
+                    self.appStatus = String(format: self.t("app.ready"), release.tag)
+                    self.installAtQuit()
+                    then?(staged)
+                case .failure(let why):
+                    self.appStatus = String(format: self.t(why.rawValue), release.tag)
+                }
             }
+        }
+    }
+
+    /// Why staging stopped: each case is the localization key of its message (a format with the release's tag).
+    enum StageFailure: String, Error {
+        case network = "app.stageNetFail", noDigest = "app.noDigest", mismatch = "app.digestMismatch"
+        case unpack = "app.unpackFail", notOurApp = "app.notOurApp"
+    }
+
+    /// The background part of staging, in a folder of its own in the temporary directory (emptied first).
+    nonisolated static func downloadAndStage(_ release: AppUpdate.Release, from url: URL, expectedID: String,
+                                             requireDigest: Bool) -> Result<AppUpdate.Staged, StageFailure> {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("nspb-update", isDirectory: true)
+        try? fm.removeItem(at: root)
+        try? fm.createDirectory(at: root, withIntermediateDirectories: true)
+        let zip = root.appendingPathComponent("update.zip")
+        let sem = DispatchSemaphore(value: 0)
+        URLSession.shared.downloadTask(with: url) { local, response, _ in
+            if let local, (response as? HTTPURLResponse)?.statusCode ?? 200 == 200 { try? FileManager.default.moveItem(at: local, to: zip) }
+            sem.signal()
+        }.resume()
+        sem.wait()
+        guard fm.fileExists(atPath: zip.path) else { return .failure(.network) }
+        return stage(zip: zip, release: release, in: root, expectedID: expectedID, requireDigest: requireDigest)
+    }
+
+    /// A downloaded zip to a staged app: its digest first, then unzip (ditto, as the release was packed), then the app inside.
+    nonisolated static func stage(zip: URL, release: AppUpdate.Release, in root: URL, expectedID: String,
+                                  requireDigest: Bool) -> Result<AppUpdate.Staged, StageFailure> {
+        let fm = FileManager.default
+        switch AppUpdate.checkDigest(zip, expected: release.digest) {
+        case .match: break
+        case .mismatch: try? fm.removeItem(at: zip); return .failure(.mismatch)
+        case .missing: if requireDigest { try? fm.removeItem(at: zip); return .failure(.noDigest) }
+        }
+        let dir = root.appendingPathComponent("app", isDirectory: true)
+        try? fm.removeItem(at: dir)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let unzip = Process()
+        unzip.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        unzip.arguments = ["-x", "-k", zip.path, dir.path]
+        do { try unzip.run() } catch { return .failure(.unpack) }
+        unzip.waitUntilExit()
+        try? fm.removeItem(at: zip)
+        // The archive holds one app: NX2Apple.app, or the bundle under an older name in a release from before a rename
+        guard unzip.terminationStatus == 0,
+              let app = ((try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []).first(where: { $0.pathExtension == "app" })
+        else { return .failure(.unpack) }
+        if AppUpdate.bundleProblem(app, expectedID: expectedID, tag: release.tag) != nil {
+            try? fm.removeItem(at: dir)
+            return .failure(.notOurApp)
+        }
+        return .success(AppUpdate.Staged(release: release, app: app))
+    }
+
+    /// No build of this app is running: none in the model, and no process group of one still alive (a stopped
+    /// build's tools can take a moment to go).
+    var mayInstallAppUpdate: Bool { !running && !Self.buildProcessesAlive }
+
+    /// Swap the staged app in. `relaunch` (Restart now, the Update button) opens the new copy and exits; at quit
+    /// the next launch is the new version. Refused while a build runs.
+    @discardableResult
+    func installStagedUpdate(relaunch: Bool, at current: URL = Bundle.main.bundleURL) -> Bool {
+        guard let staged = appStaged, appInstallability == .ok else { return false }
+        let placed: URL
+        do {
+            placed = try AppUpdate.install(staged.app, over: current, buildRunning: !mayInstallAppUpdate)
+        } catch AppUpdate.InstallError.failed(let why) {
+            appStatus = String(format: t("app.installFail"), why)
+            return false
+        } catch {
+            appStatus = t("app.waitForBuild")
+            return false
+        }
+        appStaged = nil
+        // A rename era (nxnative → NS Port Builder → NX2Apple) installs under the release's own
+        // bundle name; the Dock entry pointing at the old path goes stale once, so the log says
+        // where the new copy landed instead of leaving the player to find it.
+        if placed != current {
+            fputs("launcher: the update was installed as \(placed.lastPathComponent) (the app was renamed); "
+                + "the previous \(current.lastPathComponent) was removed — re-pin it in the Dock\n", stderr)
+            Self.noteRenamedInstall = placed.path
+        }
+        if relaunch {
+            appStatus = String(format: t("app.relaunching"), staged.release.tag)
+            NSWorkspace.shared.openApplication(at: placed, configuration: NSWorkspace.OpenConfiguration())
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { exit(0) }
+        }
+        return true
+    }
+
+    /// Restart now (Settings, the library's activity line): install and relaunch, never during a build.
+    func restartToUpdate() {
+        guard appStaged != nil else { return }
+        guard mayInstallAppUpdate else { appStatus = t("app.waitForBuild"); return }
+        installStagedUpdate(relaunch: true)
+    }
+
+    /// The staged update goes in as the app quits, so the next launch is the new version without interrupting
+    /// anyone. A build running at that moment is being ended by the same quit (exitHandlers): the swap then waits
+    /// for a later quit (the next launch stages the release again) rather than run while the build's tools are alive.
+    private func installAtQuit() {
+        guard quitObserver == nil else { return }
+        quitObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { [weak self] _ in
+            guard let self, self.autoUpdateApp, self.appStaged != nil, self.mayInstallAppUpdate else { return }
+            self.installStagedUpdate(relaunch: false)
+        }
+    }
+
+    /// The Update button (automatic updates off, or a release they would not take): download and verify, swap in,
+    /// relaunch. A staged copy of the same release goes in as it is. Not during a build: the relaunch would end it.
+    func performAppUpdate() {
+        guard let upd = appUpdate, !appBusy, appInstallability == .ok else { return }
+        guard mayInstallAppUpdate else { appStatus = t("app.waitForBuild"); return }
+        if appStaged?.release == upd { installStagedUpdate(relaunch: true); return }
+        stageAppUpdate(upd, automatic: false) { [weak self] _ in
+            guard let self else { return }
+            self.appStatus = self.t("app.installing")
+            self.installStagedUpdate(relaunch: true)
         }
     }
 
@@ -610,9 +757,29 @@ final class BuildModel: ObservableObject {
     /// pruning the build folders this pipeline itself writes so a rescan is not slow.
     func scan(folder: String) {
         gameDir = folder
-        let fm = FileManager.default
-        var base: [(String, Int)] = [], update: [(String, Int, Int)] = [], dlc: [String] = []
+        let found = Self.classify(Self.inputFiles(in: folder))
+        updateSlot("base") { $0.paths = found.base.map { [$0] } ?? []; $0.problem = found.base == nil ? "data.noBase" : "" }
+        updateSlot("update") { $0.paths = found.update.map { [$0] } ?? []; $0.problem = "" }
+        updateSlot("dlc") { $0.paths = found.dlc; $0.problem = "" }
+        updateSlot("keys") { $0.paths = found.keys.map { [$0] } ?? []; $0.problem = "" }
+        if !found.anyGame {
+            updateSlot("base") { $0.problem = "data.noNsp" }
+        }
+    }
+
+    /// What a set of files holds for the four slots (`classify`).
+    struct FoundInputs: Equatable {
+        var base: String?
+        var update: String?
+        var dlc: [String] = []
         var keys: String?
+        var anyGame: Bool { base != nil || update != nil || !dlc.isEmpty }
+    }
+
+    /// The files under a folder, pruning the build folders this pipeline itself writes so a rescan is not slow.
+    nonisolated static func inputFiles(in folder: String) -> [String] {
+        let fm = FileManager.default
+        var files: [String] = []
         var seen = 0
         let enumerator = fm.enumerator(atPath: folder)
         while let rel = enumerator?.nextObject() as? String {
@@ -629,32 +796,36 @@ final class BuildModel: ObservableObject {
                 if low == "archive" || low == "xcode" || low.hasSuffix("_build") || low.hasSuffix("_survey") { enumerator?.skipDescendants() }
                 continue
             }
-            if keys == nil && (low == "prod.keys" || low.hasSuffix(".keys")) { keys = path; continue }
-            guard low.hasSuffix(".nsp") || low.hasSuffix(".xci") else { continue }
-            let size = (try? fm.attributesOfItem(atPath: path))?[.size] as? Int ?? 0
+            files.append(path)
+        }
+        return files
+    }
+
+    /// NSP/XCI (and their compressed NSZ/XCZ) sorted by the title ID in the file name, plus the first prod.keys.
+    /// Shared by Choose game folder and files dropped on the Builds page.
+    nonisolated static func classify(_ files: [String]) -> FoundInputs {
+        var base: [(String, Int)] = [], update: [(String, Int, Int)] = [], dlc: [String] = []
+        var found = FoundInputs()
+        for path in files {
+            let name = (path as NSString).lastPathComponent
+            let low = name.lowercased()
+            if found.keys == nil && (low == "prod.keys" || low.hasSuffix(".keys")) { found.keys = path; continue }
+            guard ["nsp", "xci", "nsz", "xcz"].contains((low as NSString).pathExtension) else { continue }
+            let size = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int ?? 0
             guard size > 0 else { continue }   // an incomplete download leaves 0-byte files behind
-            guard let tid = Self.titleID(name) else { continue }   // a name without [title ID] cannot be classified
+            guard let tid = titleID(name) else { continue }   // a name without [title ID] cannot be classified
             switch tid & 0xFFF {
             case 0: base.append((path, size))
-            case 0x800: update.append((path, size, Self.updateVersion(name)))
+            case 0x800: update.append((path, size, updateVersion(name)))
             default: dlc.append(path)
             }
         }
         // several bases happen when a folder holds a repack beside the original: the largest wins
-        updateSlot("base") {
-            $0.paths = base.sorted { $0.1 > $1.1 }.prefix(1).map(\.0)
-            $0.problem = base.isEmpty ? "data.noBase" : ""
-        }
+        found.base = base.sorted { $0.1 > $1.1 }.first?.0
         // several updates: the newest [vN] is the one a profile would pack
-        updateSlot("update") {
-            $0.paths = update.sorted { $0.2 > $1.2 }.prefix(1).map(\.0)
-            $0.problem = ""
-        }
-        updateSlot("dlc") { $0.paths = dlc.sorted(); $0.problem = "" }
-        updateSlot("keys") { $0.paths = keys.map { [$0] } ?? []; $0.problem = "" }
-        if base.isEmpty && update.isEmpty && dlc.isEmpty {
-            updateSlot("base") { $0.problem = "data.noNsp" }
-        }
+        found.update = update.sorted { $0.2 > $1.2 }.first?.0
+        found.dlc = dlc.sorted()
+        return found
     }
 
     /// The [vN] in a file name, 0 when absent — used to pick the newest of several updates.
@@ -935,6 +1106,21 @@ final class BuildModel: ObservableObject {
     }
 
     /// The stamped (version, count, bytes) versus the source tree's now: nil = pack again.
+    /// The newest version folder the extraction wrote, or nil when it wrote none.
+    ///
+    /// Either shape counts: RomFS/ from the older tools, RomFS.img from the current ones (the
+    /// rewriter packs the game files itself — build_ipa_from_nsp.py:876 tests for the image).
+    /// Looking only for the folder made every 0.4.8 build report "archive skipped" after a
+    /// successful extraction (issue #73).
+    nonisolated static func extractedVersion(in extract: String) -> String? {
+        let fm = FileManager.default
+        return ((try? fm.contentsOfDirectory(atPath: extract)) ?? [])
+            .filter { $0.hasPrefix("v") && (fm.fileExists(atPath: extract + "/" + $0 + "/RomFS") ||
+                                            fm.fileExists(atPath: extract + "/" + $0 + "/RomFS.img")) }
+            .sorted { (Int($0.dropFirst()) ?? 0) < (Int($1.dropFirst()) ?? 0) }
+            .last
+    }
+
     nonisolated static func archiveReusable(source: String, version: String, stamp: String) -> Int? {
         guard let s = treeStats(source) else { return nil }
         let parts = stamp.split(separator: "\t")
@@ -1153,6 +1339,10 @@ final class BuildModel: ObservableObject {
         running = true
         let fm = FileManager.default
         let extract = workDir + "/extract"
+        // The extraction writes either a RomFS folder (older tools) or RomFS.img, one image file
+        // (the rewriter packs it now: build_ipa_from_nsp.py:876 tests for exactly that). Looking
+        // only for the folder made every 0.4.8 build end with "archive skipped" on a machine where
+        // the extraction had in fact succeeded (issue #73).
         let vers = ((try? fm.contentsOfDirectory(atPath: extract)) ?? [])
             .filter { $0.hasPrefix("v") && fm.fileExists(atPath: extract + "/" + $0 + "/RomFS") }
             .sorted { (Int($0.dropFirst()) ?? 0) < (Int($1.dropFirst()) ?? 0) }
@@ -1162,6 +1352,7 @@ final class BuildModel: ObservableObject {
             running = false; cleanupStaging(); return
         }
         let romfs = extract + "/" + v + "/RomFS"
+        let romfsImage = extract + "/" + v + "/RomFS.img"
         // The output is Documents/games/<title ID>/romfs — the per-game layout the iOS app looks for
         // first. Copying the whole `games` folder onto the phone (or into a folder the Files app
         // exposes on an external drive) then needs no renaming, and several games' folders can sit
@@ -1204,6 +1395,44 @@ final class BuildModel: ObservableObject {
         stages.append(Stage(id: idx, name: t("prog.archive"), state: .running, detail: v))
         say(String(format: t("msg.archiveLog"), romfs, dest))
 
+        // The extraction may already have packed the image (RomFS.img beside the code modules): then
+        // this is a copy, not a pack. Packing it again from a folder that no longer exists was the
+        // other half of issue #73.
+        if fm.fileExists(atPath: romfsImage) {
+            let to = dest + "/romfs.img"
+            // Reuse by the image's own identity: copying a multi-GB file on every build of an
+            // unchanged game is the cost this avoids. Size and modification date are enough — the
+            // extraction rewrites the file whenever the game's data changes.
+            if let src = try? fm.attributesOfItem(atPath: romfsImage),
+               let have = try? fm.attributesOfItem(atPath: to),
+               let a = src[.size] as? Int64, let b = have[.size] as? Int64, a == b,
+               let da = src[.modificationDate] as? Date, let db = have[.modificationDate] as? Date,
+               abs(da.timeIntervalSince(db)) < 1 {
+                stages.append(Stage(id: idx, name: t("prog.archive"), state: .done,
+                                    detail: String(format: t("prog.archiveReused"), 1)))
+                say(String(format: t("msg.archiveReused"), dest))
+                archivePath = dest
+                if let then { return then(dest) }
+                cleanupStaging()
+                finishBuild(ok: true, note: t("msg.done"))
+                return
+            }
+            try? fm.removeItem(atPath: to)
+            do {
+                try fm.copyItem(atPath: romfsImage, toPath: to)
+                stages.append(Stage(id: idx, name: t("prog.archive"), state: .done, detail: v))
+                say(String(format: t("msg.archiveLog"), romfsImage, dest))
+                archivePath = dest
+                if let then { return then(dest) }
+                cleanupStaging()
+                finishBuild(ok: true, note: t("msg.done"))
+            } catch {
+                stages.append(Stage(id: idx, name: t("prog.archive"), state: .failed, detail: error.localizedDescription))
+                doneNote = String(format: t("msg.archiveFailed"), 1)
+                running = false; cleanupStaging()
+            }
+            return
+        }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: pythonPath.isEmpty ? "/usr/bin/python3" : pythonPath)
         // dest/romfs.img: one file, which main.m's per-game lookup takes before any folder.
@@ -1550,6 +1779,14 @@ final class BuildModel: ObservableObject {
             }
         }
         cands += ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]
+        // Homebrew's python@3.x is always python3.x, but the bare python3 link exists only for
+        // the formula that is linked: a 3.12 beside an unlinked default would go unseen.
+        for dir in ["/opt/homebrew/bin", "/usr/local/bin"] {
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
+            cands += names.filter { $0.range(of: #"^python3\.\d+$"#, options: .regularExpression) != nil }
+                .sorted { $0.compare($1, options: .numeric) == .orderedDescending }
+                .map { dir + "/" + $0 }
+        }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/which")
         p.arguments = ["-a", "python3"]
@@ -1689,10 +1926,14 @@ final class BuildModel: ObservableObject {
         let pyVer = pythonVersion(py).map { "\($0.0).\($0.1)" } ?? "?"
         // A too-old interpreter is a different problem from a missing package: say which one it is,
         // because the fix differs (install a newer Python vs pip install into this one).
+        // A version we cannot read means no interpreter ran at all (py is then the venv
+        // that does not exist yet), which is not the same as one that is too old.
+        let minVer = "\(minPython.0).\(minPython.1)"
         let pyDetail = pyOK ? py
-            : (pythonVersion(py).map { $0 >= minPython } ?? false)
+            : pythonVersion(py).map { $0 >= minPython
                 ? "dep.python.missing:\(py) (\(pyVer))"
-                : "dep.python.old:\(pyVer):\(minPython.0).\(minPython.1)"
+                : "dep.python.old:\(pyVer):\(minVer)" }
+            ?? "dep.python.notFound:\(minVer):\(minVer)"
         out.append(Dep(id: "python", name: "dep.python", hint: "dep.python.hint",
                        present: pyOK, detail: pyDetail,
                        installCmd: [py, "-m", "pip", "install", "--user", "lz4", "capstone", "fonttools", "backports.zstd"]))
@@ -1739,7 +1980,7 @@ final class BuildModel: ObservableObject {
             }
             DispatchQueue.main.async {
                 if let j = self.deps.firstIndex(where: { $0.id == dep.id }) { self.deps[j].installing = false }
-                if !ok { self.doneNote = String(format: self.t("dep.install.fail"), 1) }
+                if !ok { self.doneNote = String(format: self.t("dep.install.fail"), self.t(dep.name)) }
                 self.checkDeps()
             }
         }
@@ -1776,14 +2017,15 @@ final class BuildModel: ObservableObject {
     }
 
     /// A dependency row's second column: a path when there is one, else the translated hint.
-    /// `detail` carries either a real path, an L10n key, or "key:argument".
+    /// `detail` carries either a real path, an L10n key, or "key:argument[:argument…]".
     func depDetail(_ d: Dep) -> String {
         let raw = d.detail
         if raw.isEmpty { return t(d.hint) }
         if raw.hasPrefix("/") || raw.hasPrefix("~") { return raw }
         if let colon = raw.firstIndex(of: ":") {
             let key = String(raw[..<colon]), arg = String(raw[raw.index(after: colon)...])
-            if L10n.table[key] != nil { return String(format: t(key), shortPath(arg)) }
+            let args = arg.components(separatedBy: ":").map { shortPath($0) as CVarArg }
+            if L10n.table[key] != nil { return String(format: t(key), arguments: args) }
         }
         if L10n.table[raw] != nil { return t(raw) }
         return raw
@@ -1801,8 +2043,10 @@ struct BuilderView: View {
     var onChooseLibraryFolder: () -> Void = {}
     var onOpenControls: () -> Void = {}
     var controlChanges = 0
+    @AppStorage(BuildNotice.defaultsKey) private var notifyBuilds = true   // BuildNotifications.swift
     @State private var extrasOpen = false
     @State private var logOpen = false
+    @State private var keyCheck: KeyCheck.Outcome?   // prod.keys against the chosen files (KeyCheck.swift)
     @EnvironmentObject private var padFocus: PadFocus
 
     var body: some View {
@@ -1818,6 +2062,7 @@ struct BuilderView: View {
         .onChange(of: padFocus.focused) { id in   // a controller's focus on this page scrolls into view
             if let id, id.hasPrefix("set.") { withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .center) } }
         }
+        .modifier(GameFilesDrop(enabled: !settings && !m.running, label: m.t("drop.hint")) { m.take(dropped: $0) })   // DropFiles.swift
         }
         .buttonStyle(LauncherSecondaryButtonStyle())
     }
@@ -1953,7 +2198,10 @@ struct BuilderView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            ForEach(m.slots.filter { !$0.optional }, id: \.id) { s in divider; slotRow(s) }
+            ForEach(m.slots.filter { !$0.optional }, id: \.id) { s in
+                divider; slotRow(s)
+                if s.id == "keys", let keyCheck { KeyCheckLine(outcome: keyCheck, t: m.t) }
+            }
             divider
             disclosure(m.t("build.options"), isOpen: extrasOpen) { extrasOpen.toggle() }
             if extrasOpen {
@@ -1966,6 +2214,9 @@ struct BuilderView: View {
                     if d.runModal() == .OK, let u = d.url { m.outDir = u.path }
                 }
             }
+        }
+        .task(id: KeyCheck.Inputs(keys: m.keysPath, files: [m.basePath, m.updatePath] + m.dlcPaths)) {
+            keyCheck = await KeyCheck.runDetached(KeyCheck.Inputs(keys: m.keysPath, files: [m.basePath, m.updatePath] + m.dlcPaths))
         }
     }
 
@@ -2128,6 +2379,9 @@ struct BuilderView: View {
             disclosure(m.t("build.log"), isOpen: logOpen) { logOpen.toggle() }
             if logOpen { logView.padding(.horizontal, 14).padding(.bottom, 14) }
         }
+        .onReceive(BuildNotifier.shared.$showLog) { show in   // a clicked notification of a failed build
+            if show { logOpen = true; DispatchQueue.main.async { BuildNotifier.shared.showLog = false } }
+        }
     }
 
     private var logView: some View {
@@ -2235,14 +2489,33 @@ struct BuilderView: View {
                 .padTarget("set.language", scope: "main", activate: { cycleLanguage(1) }, adjust: { cycleLanguage($0) })
             }
             divider
-            row("NX2Apple", detail: String(format: m.t("app.version"), BuildModel.appVersion)) {
-                if let u = m.appUpdate {
-                    Button(String(format: m.t("app.updateBtn"), u.tag)) { m.performAppUpdate() }.disabled(m.appBusy)
-                        .padTarget("set.appUpdate", scope: "main") { if !m.appBusy { m.performAppUpdate() } }
+            // Build notifications (BuildNotifications.swift): none without an app bundle, e.g. under swift run
+            row(m.t("settings.notify"), detail: m.t(BuildNotice.hasBundleID ? "settings.notifyNote" : "settings.notifyUnbundled")) {
+                Toggle("", isOn: $notifyBuilds).toggleStyle(LauncherSwitchStyle()).labelsHidden().disabled(!BuildNotice.hasBundleID)
+                    .padTarget("set.notify", scope: "main") { notifyBuilds.toggle() }
+            }
+            divider
+            row("NX2Apple", detail: String(format: m.t("app.version"), BuildModel.appVersion),
+                dot: m.appStaged != nil ? LauncherPalette.ready : nil) {
+                if m.appBusy { ProgressView().controlSize(.small) }
+                if m.appStaged != nil {
+                    // Downloaded and verified: it goes in when the app quits; this restarts into it now (not during a build)
+                    Button(m.t("app.restartNow")) { m.restartToUpdate() }.disabled(m.running)
+                        .padTarget("set.appRestart", scope: "main") { if !m.running { m.restartToUpdate() } }
+                } else if let u = m.appUpdate, m.appInstallability == .ok {
+                    Button(String(format: m.t("app.updateBtn"), u.tag)) { m.performAppUpdate() }.disabled(m.appBusy || m.running)
+                        .padTarget("set.appUpdate", scope: "main") { if !(m.appBusy || m.running) { m.performAppUpdate() } }
                 } else {
                     Button(m.t("repo.check")) { m.checkAppUpdate() }.disabled(m.appBusy)
                         .padTarget("set.appCheck", scope: "main") { if !m.appBusy { m.checkAppUpdate() } }
                 }
+            }
+            divider
+            // A launcher built from the repository never replaces itself (AppUpdate.installability): the switch says so and stays off
+            row(m.t("app.auto"), detail: m.t(m.appInstallability == .ok ? "app.autoNote" : m.appInstallability == .developer ? "app.autoDev" : "app.autoReadOnly")) {
+                Toggle("", isOn: Binding(get: { m.autoUpdateApp && m.appInstallability == .ok }, set: { m.autoUpdateApp = $0 }))
+                    .labelsHidden().toggleStyle(LauncherSwitchStyle()).disabled(m.appInstallability != .ok)
+                    .padTarget("set.appAuto", scope: "main") { if m.appInstallability == .ok { m.autoUpdateApp.toggle() } }
             }
         }
     }

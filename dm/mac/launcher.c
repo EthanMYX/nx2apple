@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <dirent.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include "romfs_image.h"
@@ -58,6 +59,43 @@ static void mkdirs(const char *path) {   // mkdir -p
     mkdir(p, 0755);
 }
 
+static int dir_has_entries(const char *path) {   // anything inside at all (a save folder, a log folder)
+    DIR *d = opendir(path); if (!d) return 0;
+    struct dirent *e; int any = 0;
+    while ((e = readdir(d))) if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..")) { any = 1; break; }
+    closedir(d); return any;
+}
+
+static int copy_file(const char *from, const char *to) {
+    FILE *in = fopen(from, "rb"); if (!in) return 0;
+    FILE *out = fopen(to, "wb"); if (!out) { fclose(in); return 0; }
+    char buf[1 << 16]; size_t n; int ok = 1;
+    while ((n = fread(buf, 1, sizeof buf, in)) > 0) if (fwrite(buf, 1, n, out) != n) { ok = 0; break; }
+    if (ferror(in)) ok = 0;
+    fclose(in); if (fclose(out)) ok = 0;
+    if (!ok) unlink(to);
+    return ok;
+}
+
+/// Recursive copy for the one-time migration of a save folder. Symlinks are followed (a save is
+/// plain files); a file that already exists is left alone, so a half-finished copy can be resumed.
+static void copy_tree(const char *from, const char *to) {
+    mkdirs(to);
+    DIR *d = opendir(from); if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        char a[PATH_MAX], b[PATH_MAX];
+        snprintf(a, sizeof a, "%s/%s", from, e->d_name);
+        snprintf(b, sizeof b, "%s/%s", to, e->d_name);
+        struct stat st;
+        if (stat(a, &st)) continue;
+        if (S_ISDIR(st.st_mode)) copy_tree(a, b);
+        else if (S_ISREG(st.st_mode) && access(b, F_OK)) copy_file(a, b);
+    }
+    closedir(d);
+}
+
 static void env_file(const char *path) {   // KEY=VALUE lines, # starts a comment; a variable already set stays
     FILE *f = fopen(path, "r"); if (!f) return;
     char ln[4096];
@@ -98,6 +136,39 @@ int main(void) {
     snprintf(sup, sizeof sup, "%s/Library/Application Support/nxnative/%s", home, id);
     snprintf(save, sizeof save, "%s/save", sup); snprintf(temp, sizeof temp, "%s/temp", sup);
     snprintf(logs, sizeof logs, "%s/Library/Logs/nxnative", home);
+    // Saves and logs beside the game, not under ~/Library: a library folder the user can move or
+    // keep on an external drive has to carry its saves with it, or they are effectively lost the
+    // moment the folder moves (the files are still in ~/Library, where nobody looks for them).
+    //
+    // The library root is the folder the app sits in, when that folder also holds games/ — the
+    // layout the Mac front end writes (<out>/<id>.app, <out>/games/<id>/romfs.img). A bundle
+    // copied somewhere else keeps the old ~/Library paths, so nothing breaks for a user who never
+    // used the launcher's folder.
+    {
+        char appdir[PATH_MAX]; snprintf(appdir, sizeof appdir, "%s", exe);
+        *strrchr(appdir, '/') = 0; *strrchr(appdir, '/') = 0; *strrchr(appdir, '/') = 0;   // …/<id>.app/Contents/MacOS/<launcher> → the .app's folder
+        char probe[PATH_MAX]; snprintf(probe, sizeof probe, "%s/games", appdir);
+        if (!stat(probe, &st)) {
+            snprintf(save, sizeof save, "%s/save/%s", appdir, id);
+            snprintf(logs, sizeof logs, "%s/log", appdir);
+            snprintf(temp, sizeof temp, "%s/temp/%s", appdir, id);
+            // First run after this change: bring the old saves and log across rather than starting
+            // the player on an empty save slot. Copied, not moved — an older build of the same app
+            // still reads the old place, and a copy is cheap next to a save.
+            char oldsave[PATH_MAX], oldlog[PATH_MAX];
+            snprintf(oldsave, sizeof oldsave, "%s/Library/Application Support/nxnative/%s/save", home, id);
+            snprintf(oldlog, sizeof oldlog, "%s/Library/Logs/nxnative/%s.log", home, id);
+            mkdirs(save); mkdirs(logs); mkdirs(temp);
+            if (dir_has_entries(oldsave) && !dir_has_entries(save)) {
+                copy_tree(oldsave, save);
+                fprintf(stderr, "launcher: saves copied from %s to %s (they now live with the game)\n", oldsave, save);
+            }
+            char newlog[PATH_MAX]; snprintf(newlog, sizeof newlog, "%s/%s.log", logs, id);
+            if (!stat(oldlog, &st) && stat(newlog, &st)) {
+                if (copy_file(oldlog, newlog)) fprintf(stderr, "launcher: the previous log was copied from %s\n", oldlog);
+            }
+        }
+    }
     snprintf(log, sizeof log, "%s/%s.log", logs, id); snprintf(prev, sizeof prev, "%s/%s.prev.log", logs, id);
     mkdirs(save); mkdirs(temp); mkdirs(logs);
     rename(log, prev);

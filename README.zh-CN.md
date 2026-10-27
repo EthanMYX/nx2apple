@@ -255,7 +255,7 @@ Homebrew 工具和 Python 包，然后打 IPA。
 ```bash
 git clone https://github.com/<you>/NX2Apple.git
 cd NX2Apple
-brew install xcodegen zstd spirv-cross
+brew install xcodegen zstd spirv-cross glslang   # glslang: OpenGL (LÖVE) games only
 brew install --cask dotnet-sdk
 python3 -m pip install lz4 capstone fonttools backports.zstd
 ```

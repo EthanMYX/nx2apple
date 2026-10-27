@@ -398,6 +398,18 @@ final class LibraryTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), data)
     }
 
+    func testInstalledAppsAreFoundAtTopLevelOnly() throws {
+        let app = try makeApp(titleID)
+        let apps = temporary.appendingPathComponent("Applications")
+        try FileManager.default.createDirectory(at: apps.appendingPathComponent("Games"), withIntermediateDirectories: true)
+        let installed = apps.appendingPathComponent(app.lastPathComponent)
+        try FileManager.default.copyItem(at: app, to: installed)
+        try FileManager.default.moveItem(at: app, to: apps.appendingPathComponent("Games/" + app.lastPathComponent))
+        let missing = temporary.appendingPathComponent("NoSuchFolder")
+        XCTAssertEqual(GameLibrary.installedApps(in: [apps, missing]).map { $0.resolvingSymlinksInPath().path },
+                       [installed.resolvingSymlinksInPath().path])
+    }
+
     func testFolderDiscoveryPrunesGameContentsAndRemembersLocation() throws {
         let app = try makeApp(titleID)
         let nested = temporary.appendingPathComponent("My games/Hades/mac")
@@ -411,6 +423,7 @@ final class LibraryTests: XCTestCase {
         XCTAssertTrue(GameLibrary.builtApps(in: temporary.appendingPathComponent("unmounted-volume")).isEmpty)
         let state = temporary.appendingPathComponent("library.json")
         let library = GameLibrary(file: state)
+        library.applicationFolders = []   // the machine's own /Applications is not part of this test
         let finished = expectation(description: "Folder scan completes")
         let token = library.$scanning.dropFirst().filter { !$0 }.sink { _ in finished.fulfill() }
         library.setFolder(temporary)
@@ -637,9 +650,10 @@ final class LibraryTests: XCTestCase {
         model.slots[0].paths = []
         library.selectedID = library.games.first?.id
         func capture(_ name: String, width: CGFloat = 1440, height: CGFloat = 1024, page: LauncherPage = .library, activeID: UUID? = nil, empty: Bool = false,
-                     search: String? = nil) throws {
+                     search: String? = nil, older: Set<UUID> = []) throws {
             let store = empty ? GameLibrary(file: temporary.appendingPathComponent("empty.json")) : library
-            let view = ContentView(model: model, library: store, initialPage: page, activeBuildID: activeID, performStartupChecks: false, search: search)
+            let view = ContentView(model: model, library: store, initialPage: page, activeBuildID: activeID, performStartupChecks: false, search: search,
+                                   olderTools: older)
             let host = NSHostingView(rootView: view)
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
                                   styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
@@ -656,10 +670,30 @@ final class LibraryTests: XCTestCase {
         try capture("library")
         try capture("library-search", search: "zel")
         try capture("library-small", width: 900, height: 680)
+        try capture("library-fullscreen", width: 2000, height: 1125)   // the cards at their widest: the row must fit under the hero
         try capture("empty", empty: true)
         try capture("build", page: .builds)
         try capture("build-small", width: 900, height: 680, page: .builds)
         try capture("settings", page: .settings)
+        do {   // a released copy with an update downloaded and verified: Restart now in Settings and in the activity line
+            let previous = (model.appInstallability, model.appUpdate, model.appStaged, model.appStatus)
+            defer { (model.appInstallability, model.appUpdate, model.appStaged, model.appStatus) = previous }
+            let release = AppUpdate.Release(tag: "v0.4.8", url: "https://example.invalid/NX2Apple-macOS-arm64.zip", digest: nil)
+            model.appInstallability = .ok
+            model.appUpdate = release
+            model.appStatus = String(format: model.t("app.found"), release.tag)
+            try capture("settings-update-found", page: .settings)
+            model.appStaged = AppUpdate.Staged(release: release, app: temporary.appendingPathComponent("NX2Apple.app"))
+            model.appStatus = String(format: model.t("app.ready"), release.tag)
+            try capture("settings-update-ready", page: .settings)
+            try capture("library-update-ready")
+        }
+        // Games built with older build tools (ToolsAge): the selected one rebuilt from its own inputs, as a recorded build has them
+        model.slots[0].paths = ["/preview/Hades [\(titleID)].nsp"]
+        _ = library.rememberInputs(model)
+        model.slots[0].paths = []
+        try capture("library-older-tools", older: [library.games[0].id, library.games[1].id])
+        try capture("library-older-tools-small", width: 900, height: 680, older: [library.games[0].id, library.games[1].id])
         // An iPhone build with a paired device and a team (example values)
         let previousTarget = model.target
         model.target = "ios"
@@ -671,6 +705,23 @@ final class LibraryTests: XCTestCase {
         model.installDevice = "00008150-AAAA"; model.signingTeam = "TEAM123456"
         try capture("build-install", height: 1300, page: .builds)
         model.installDevice = previousDevice; model.signingTeam = previousTeam; model.target = previousTarget
+        // The Free space sheet with a measured build folder (example sizes), two parts picked, then while a build runs
+        let measured = BuildFolderSurvey(folder: "/Volumes/Games/Hades/\(titleID)_build",
+                                         sizes: [.extracted: 9_800_000_000, .shaders: 1_450_000_000, .xcode: 2_100_000_000, .caches: 610_000_000], kept: 48_000_000)
+        for (name, running) in [("free-space", false), ("free-space-running", true)] {
+            model.running = running
+            let sheet = NSHostingView(rootView: FreeSpaceView(m: model, game: library.games[0], survey: measured, chosen: [.extracted, .xcode])
+                .environmentObject(PadFocus()))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 690), styleMask: [.titled], backing: .buffered, defer: false)
+            window.contentView = sheet
+            window.orderFront(nil)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+            let rep = try XCTUnwrap(sheet.bitmapImageRepForCachingDisplay(in: sheet.bounds))
+            sheet.cacheDisplay(in: sheet.bounds, to: rep)
+            try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent(name + ".png"))
+            window.orderOut(nil)
+        }
+        model.running = false
         if let json = ProcessInfo.processInfo.environment["NX_LAUNCHER_CAPTURE_SETTINGS"] {   // a launcher.json from dm/games/settings.py
             let first = library.games[0]
             let dm = URL(fileURLWithPath: first.appPath).appendingPathComponent("Contents/Resources/dm")
@@ -779,6 +830,44 @@ final class LibraryTests: XCTestCase {
             try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent("diagnostics-copied.png"))
             window.orderOut(nil)
         }
+        // ---- Saves (#66): the sheet with a stand-in devicectl and a temporary Mac folder, then its question, reached by the controller ----
+        do {
+            let game = library.games[0]
+            let installed = temporary.appendingPathComponent("DmIOS.app")
+            try FileManager.default.createDirectory(at: installed, withIntermediateDirectories: true)
+            try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": "com.example.hades"], format: .xml, options: 0)
+                .write(to: installed.appendingPathComponent("Info.plist"))
+            library.recordCompletedIOS(ipa: "", archive: "", app: installed.path, device: "00008150-AAAA", for: game.id)
+            let support = temporary.appendingPathComponent("Application Support")
+            let save = SaveTransfer.legacyMacSave(titleID: game.titleID, support: support).appendingPathComponent("data.bin")
+            try FileManager.default.createDirectory(at: save.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("mac".utf8).write(to: save)
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -3 * 86_400)], ofItemAtPath: save.path)
+            let device = DeviceControl { args in   // a device whose save is from an hour ago
+                guard let i = args.firstIndex(of: "--json-output") else { return (false, "ERROR: not in the visual QA") }
+                let files = args.contains("--recurse") ? [["name": "data.bin", "fileType": "file", "modificationDate": ISO8601DateFormatter().string(from: Date(timeIntervalSinceNow: -3600))]] : []
+                try? JSONSerialization.data(withJSONObject: ["result": ["files": files]]).write(to: URL(fileURLWithPath: args[i + 1]))
+                return (true, "")
+            }
+            let focus = PadFocus()
+            let host = NSHostingView(rootView: SavesView(m: model, library: library, gameID: game.id, devicectl: device, support: support).environmentObject(focus))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 520), styleMask: [.titled], backing: .buffered, defer: false)
+            window.contentView = host
+            window.orderFront(nil)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+            func shot(_ name: String) throws {
+                let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: rep)
+                try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent(name + ".png"))
+            }
+            try shot("saves")
+            focus.scope = "saves"
+            focus.show(default: "saves.toDevice")
+            focus.activate()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+            try shot("saves-confirm")
+            window.orderOut(nil)
+        }
     }
 
     /// Issue #52: the failure note names the last real line, not just the exit code.
@@ -830,5 +919,25 @@ final class LibraryTests: XCTestCase {
             XCTAssertTrue(v.0 > floor.0 || (v.0 == floor.0 && v.1 >= floor.1),
                           "picked \(path) at \(v.0).\(v.1), below the \(floor.0).\(floor.1) floor")
         }
+    }
+
+    /// Issue #73: the extraction writes RomFS.img now, not a RomFS folder. The archive step looked
+    /// only for the folder, so every build ended with "archive skipped" after a successful build.
+    /// This drives BuildModel.extractedVersion — the function the archive step calls — rather than
+    /// restating its predicate, so changing the production code changes what this checks.
+    func testTheExtractionIsFoundAsEitherAFolderOrAnImage() throws {
+        let work = FileManager.default.temporaryDirectory.appendingPathComponent("nspb-extract-" + UUID().uuidString)
+        let extract = work.appendingPathComponent("extract")
+        defer { try? FileManager.default.removeItem(at: work) }
+        try FileManager.default.createDirectory(at: extract.appendingPathComponent("v0"), withIntermediateDirectories: true)
+        XCTAssertNil(BuildModel.extractedVersion(in: extract.path), "an empty version folder holds neither shape")
+        // what the rewriter writes today
+        try Data([0x44, 0x4d, 0x52, 0x4f, 0x4d, 0x46, 0x53, 0x31])
+            .write(to: extract.appendingPathComponent("v0").appendingPathComponent("RomFS.img"))
+        XCTAssertEqual(BuildModel.extractedVersion(in: extract.path), "v0", "RomFS.img alone must count")
+        // and the older shape still works, with the highest version winning
+        try FileManager.default.createDirectory(at: extract.appendingPathComponent("v1").appendingPathComponent("RomFS"),
+                                                withIntermediateDirectories: true)
+        XCTAssertEqual(BuildModel.extractedVersion(in: extract.path), "v1")
     }
 }
