@@ -612,3 +612,17 @@ final class LibraryTests: XCTestCase {
         model.running = false
     }
 }
+
+    /// Issue #52: the failure note names the last real line, not just the exit code.
+    func testLastMeaningfulLineSkipsProgressEventsAndBlankLines() {
+        let log = """
+        [1/7] extract
+        {"event":"progress","frac":0.4}
+
+        RuntimeError: no prod.keys in the game folder
+
+        """
+        XCTAssertEqual(BuildModel.lastMeaningfulLine(log), "RuntimeError: no prod.keys in the game folder")
+        XCTAssertNil(BuildModel.lastMeaningfulLine("\n\n"))
+        XCTAssertNil(BuildModel.lastMeaningfulLine("{\"event\":\"stage_end\"}\n"))
+    }

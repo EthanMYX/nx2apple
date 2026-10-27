@@ -46,6 +46,9 @@ class MainWindow(QMainWindow):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
+        # kept so a failed build can scroll the log into view: the message says "see the log
+        # below", and on a window shorter than about 600 px the log sits below the fold (issue #52)
+        self.scroll = scroll
         body = QWidget()
         body.setObjectName('body')
         self.body = QVBoxLayout(body)
@@ -477,6 +480,9 @@ class MainWindow(QMainWindow):
         # updated it — the footer was English after the toggle.
         if running:
             self.footer.setText('')
+        elif getattr(self, '_failed', False):
+            pass          # a failure message stays until the next build: it was being replaced by
+                          # the input reminder on the refresh that follows the failure (issue #52)
         elif not self.m.base_path:
             self.footer.setText(self.m.t('status.needInputs'))
         elif not self.m.repo_ok:
@@ -510,6 +516,12 @@ class MainWindow(QMainWindow):
             msg = note or self.m.t('msg.buildFailed')
             self.footer.setStyleSheet(f'color: {RED};')
         self.footer.setText(msg)
+        self._failed = not ok
+        if not ok:
+            # The message points at the log, so put it in view rather than trusting the window to
+            # be tall enough. ensureWidgetVisible also handles the scroll area's own margin.
+            self.scroll.ensureWidgetVisible(self.log, 0, 0)
+            self.log.setFocus(Qt.OtherFocusReason)
         self._refresh_running()
 
     # ---------------------------------------------------------------- actions
@@ -524,6 +536,7 @@ class MainWindow(QMainWindow):
         else:
             self.footer.setText('')
             self.footer.setStyleSheet('')
+            self._failed = False
             self.m.start_build()
 
     def _choose_repo(self) -> None:

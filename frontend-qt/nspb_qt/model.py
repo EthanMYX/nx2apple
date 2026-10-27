@@ -81,6 +81,7 @@ class Model(QObject):
         self.stages: list[Stage] = []
         self.running = False
         self.log_tail = ''
+        self._last_error = ''   # the last real log line: the failure note names it (issue #52)
         self.game_dir = ''
         self.base_path = ''
         self.update_path = ''
@@ -972,6 +973,7 @@ class Model(QObject):
         self.stages = []
         self.ipa_path = self.archive_path = self.mac_app_path = ''
         self.log_tail = ''
+        self._last_error = ''
         self.stagesChanged.emit()
         self.log(self.t('msg.running', py + ' ' + ' '.join(args)) + '\n')
 
@@ -1023,7 +1025,10 @@ class Model(QObject):
                 if self.stages:
                     self.stages[-1].state = 'failed'
                     self.stagesChanged.emit()
-                self.finished.emit(False, self.t('msg.buildFailed'))
+                # The last real line says more than the exit code: "Build failed (exit code 1)"
+                # on its own sent a reporter looking for a log that was not on screen (#52)
+                last = getattr(self, '_last_error', '')
+                self.finished.emit(False, self.t('msg.buildFailedReason', last) if last else self.t('msg.buildFailed'))
             if staging:
                 shutil.rmtree(staging, ignore_errors=True)
 
@@ -1040,6 +1045,11 @@ class Model(QObject):
         """Feed one line of the build's output: stage lines move the stage list, everything
         else goes to the log (which is what the window shows)."""
         self.log(line + '\n')
+        # The last line that was not stage bookkeeping: a failed build's summary used to be the
+        # bare exit code ("Build failed (exit code 1)"), which told the reporter nothing and sent
+        # them looking for a log that a short window had below the fold (issue #52)
+        if line.strip() and not (line.startswith('[') and ']' in line and line.find(']') + 1 < len(line)):
+            self._last_error = line.strip()[:200]
         if line.startswith('output IPA:'):
             self.ipa_path = line.split(':', 1)[1].strip()
         low = line.lower()

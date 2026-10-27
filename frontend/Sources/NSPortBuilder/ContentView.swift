@@ -762,7 +762,15 @@ final class BuildModel: ObservableObject {
                     if let i = self.stages.lastIndex(where: { $0.state == .running }) {
                         self.stages[i].state = .failed
                         self.stages[i].detail = String(format: self.t("msg.exitCode"), status.terminationStatus)
-                    } else { self.doneNote = String(format: self.t("msg.buildFailed"), status.terminationStatus) }
+                    } else {
+                        // The last real line says more than the exit code alone, and the message
+                        // points at the log: "Build failed (exit code 1)" with nothing else sent a
+                        // reporter looking for a log that a short window had below the fold (#52)
+                        self.doneNote = String(format: self.t("msg.buildFailed"), status.terminationStatus)
+                        if let last = Self.lastMeaningfulLine(self.logTail) {
+                            self.doneNote = String(format: self.t("msg.buildFailedReason"), last)
+                        }
+                    }
                     self.cleanupStaging()
                 }
             }
@@ -829,6 +837,17 @@ final class BuildModel: ObservableObject {
     private func markAllDone() { for i in stages.indices where stages[i].state != .failed { stages[i].state = .done } }
 
     // MARK: Output parsing
+
+    /// The last line of the log that says something: not blank, not a progress event. Used for the
+    /// failure note, where the exit code on its own is not actionable (issue #52).
+    static func lastMeaningfulLine(_ log: String) -> String? {
+        for line in log.split(separator: "\n", omittingEmptySubsequences: true).reversed() {
+            let s = line.trimmingCharacters(in: .whitespaces)
+            if s.isEmpty || s.hasPrefix("{") { continue }   // a --progress json event
+            return String(s.prefix(200))
+        }
+        return nil
+    }
 
     private func say(_ s: String) { append(s + "\n") }
     private func append(_ s: String) {

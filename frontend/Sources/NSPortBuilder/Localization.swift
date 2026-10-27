@@ -379,6 +379,8 @@ enum L10n {
         "msg.stopped": ("已停止", "Stopped"),
         "msg.buildFailed": ("构建失败（退出码 %d），见下方日志",
                             "Build failed (exit code %d) — see the log below"),
+        "msg.buildFailedReason": ("构建失败，见下方日志。最后一行：%@",
+                                  "Build failed — see the log below. Last line: %@"),
         "msg.exitCode": ("退出码 %d", "exit code %d"),
         "msg.stagingFailed": ("无法在暂存文件夹里建立链接（文件在不同磁盘？）",
                               "Could not create links in the staging folder (files on different volumes?)"),
