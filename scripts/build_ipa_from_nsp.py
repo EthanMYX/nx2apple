@@ -436,6 +436,8 @@ def scan_nsps(nsp_dir):
     the title as an NSP's does) and converted afterwards (decompress_nsz)"""
     fams, unknown = {}, []
     for p in sorted([*nsp_dir.glob('*.nsp'), *nsp_dir.glob('*.xci'), *nsp_dir.glob('*.nsz'), *nsp_dir.glob('*.xcz')]):   # a base game may be a cartridge dump (.xci: Monster Hunter Rise); nx_extract reads its secure partition
+        if p.name.startswith('._'):
+            continue   # an AppleDouble file: macOS writes one beside every real file on exFAT/FAT drives, and its name carries the same [title ID] — counting it made the one real update NSP read as two, and both were then left out (the report's Hades II build)
         if p.stat().st_size == 0:   # an empty file left by an incomplete download (the Zelda BotW folder holds a 0-byte DLC NSP next to the complete (1).nsp)
             say(f'skipping an empty file: {p.name}'); continue
         if p.suffix in COMPRESSED and p.with_suffix(COMPRESSED[p.suffix]).exists():

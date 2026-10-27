@@ -829,6 +829,7 @@ final class BuildModel: ObservableObject {
         for path in files {
             let name = (path as NSString).lastPathComponent
             let low = name.lowercased()
+            if name.hasPrefix("._") { continue }   // an AppleDouble file macOS writes beside every real file on exFAT/FAT drives: its name carries the same [title ID], so counting it made one update read as two
             if found.keys == nil && (low == "prod.keys" || low.hasSuffix(".keys")) { found.keys = path; continue }
             guard ["nsp", "xci", "nsz", "xcz"].contains((low as NSString).pathExtension) else { continue }
             let size = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int ?? 0
@@ -1526,6 +1527,28 @@ final class BuildModel: ObservableObject {
     /// game files (DM_COPY_ROMFS=NO), install it, then copy the game's folder (romfs.img, aoc/) into its
     /// Documents/games/<title ID>/, where the app looks first (main.m), as a sideloaded copy has it. devicectl skips files
     /// that did not change, so a reinstall sends the code and shaders, not the game again.
+    /// Install the app xcodebuild produced, then copy the game data into it. Shared by the plain
+    /// sign flow and the team-variant retry.
+    private func installBuiltApp(app: String, archive: String, device: String, xcrun: String) {
+        let name = deviceName(device)
+        guard FileManager.default.fileExists(atPath: app) else { return finishInstall(String(format: t("dev.noProject"), shortPath(app))) }
+        runTool(id: 1002, name: String(format: t("dev.installStage"), name),
+                [xcrun, "devicectl", "device", "install", "app", "--device", device, app], step: Self.installStep) { error in
+            if let error { return self.finishInstall(String(format: self.t("dev.installFailed"), error)) }
+            guard let bundle = NSDictionary(contentsOfFile: app + "/Info.plist")?["CFBundleIdentifier"] as? String else {
+                return self.finishInstall(String(format: self.t("dev.noProject"), self.shortPath(app + "/Info.plist")))
+            }
+            let tid = Self.titleID(self.basePath).map { String(format: "%016llX", $0) } ?? "game"
+            self.runTool(id: 1003, name: String(format: self.t("dev.copyStage"), name),
+                         Self.archiveCopy(xcrun: xcrun, device: device, bundle: bundle, archive: archive, titleID: tid), step: Self.installStep) { error in
+                if let error { return self.finishInstall(String(format: self.t("dev.copyFailed"), error)) }
+                self.installedOn = device
+                self.installedAppPath = app
+                self.finishInstall(nil)
+            }
+        }
+    }
+
     private func signAndInstall(archive: String) {
         let work = effectiveWorkDir, project = work + "/xcode/DmIOS.xcodeproj", derived = work + "/xcode-derived-data"
         let device = installDevice, team = signingTeam, name = deviceName(device), xcrun = xcrunPath
@@ -1534,27 +1557,38 @@ final class BuildModel: ObservableObject {
             let scheme = Self.scheme(of: project, xcrun: xcrun)
             DispatchQueue.main.async {
                 guard let scheme else { return self.finishInstall(String(format: self.t("dev.noProject"), self.shortPath(project))) }
-                let sign = [xcrun, "xcodebuild", "-project", project, "-scheme", scheme, "-configuration", "Release",
-                            "-destination", "id=\(device)", "-derivedDataPath", derived, "-allowProvisioningUpdates",
-                            "DEVELOPMENT_TEAM=\(team)", "DM_COPY_ROMFS=NO", "build"]
-                self.runTool(id: 1001, name: String(format: self.t("dev.signStage"), name), sign, step: Self.xcodeStep) { error in
-                    if let error { return self.finishInstall(String(format: self.t("dev.signFailed"), error)) }
-                    let app = derived + "/Build/Products/Release-iphoneos/DmIOS.app"
-                    guard FileManager.default.fileExists(atPath: app) else { return self.finishInstall(String(format: self.t("dev.noProject"), self.shortPath(app))) }
-                    self.runTool(id: 1002, name: String(format: self.t("dev.installStage"), name),
-                                 [xcrun, "devicectl", "device", "install", "app", "--device", device, app], step: Self.installStep) { error in
-                        if let error { return self.finishInstall(String(format: self.t("dev.installFailed"), error)) }
-                        guard let bundle = NSDictionary(contentsOfFile: app + "/Info.plist")?["CFBundleIdentifier"] as? String else {
-                            return self.finishInstall(String(format: self.t("dev.noProject"), self.shortPath(app + "/Info.plist")))
+                // The app's own bundle ID can be taken: App IDs are global and register to the first
+                // team that uses one, so a game built before with another Apple ID fails here for
+                // ever after. The retry appends this team to the identifier — a stable per-team
+                // variant — as a command-line setting, which overrides the project's.
+                func sign(_ extra: [String] = []) -> [String] {
+                    [xcrun, "xcodebuild", "-project", project, "-scheme", scheme, "-configuration", "Release",
+                     "-destination", "id=\(device)", "-derivedDataPath", derived, "-allowProvisioningUpdates",
+                     "DEVELOPMENT_TEAM=\(team)", "DM_COPY_ROMFS=NO"] + extra + ["build"]
+                }
+                let appID = "org.nxnative." + (Self.titleID(self.basePath).map { String(format: "%016llX", $0) } ?? "game").lowercased()
+                let teamVariant = "org.nxnative." + appID.split(separator: ".").last!.appending(".\(team)")
+                func taken(_ e: String?) -> Bool {
+                    guard let e else { return false }
+                    return e.contains("cannot be registered to your development team") || e.contains("No profiles for 'org.nxnative.")
+                }
+                self.runTool(id: 1001, name: String(format: self.t("dev.signStage"), name), sign(), step: Self.xcodeStep) { firstError in
+                    if let firstError, taken(firstError) {
+                        // Once more under this team's own identifier, and the log says why the first try failed.
+                        fputs("signing: " + appID + " is registered to another team; retrying as " + teamVariant + "\n", stderr)
+                        self.runTool(id: 1001, name: String(format: self.t("dev.signStage"), name), sign(["PRODUCT_BUNDLE_IDENTIFIER=" + teamVariant]), step: Self.xcodeStep) { retryError in
+                            if let retryError, !retryError.isEmpty {
+                                self.finishInstall(String(format: self.t("dev.signFailed"), retryError))
+                            } else {
+                                self.installBuiltApp(app: derived + "/Build/Products/Release-iphoneos/DmIOS.app", archive: archive, device: device, xcrun: xcrun)
+                            }
                         }
-                        let tid = Self.titleID(self.basePath).map { String(format: "%016llX", $0) } ?? "game"
-                        self.runTool(id: 1003, name: String(format: self.t("dev.copyStage"), name),
-                                     Self.archiveCopy(xcrun: xcrun, device: device, bundle: bundle, archive: archive, titleID: tid), step: Self.installStep) { error in
-                            if let error { return self.finishInstall(String(format: self.t("dev.copyFailed"), error)) }
-                            self.installedOn = device
-                            self.installedAppPath = app
-                            self.finishInstall(nil)
-                        }
+                        return
+                    }
+                    if let firstError, !firstError.isEmpty {
+                        self.finishInstall(String(format: self.t("dev.signFailed"), firstError))
+                    } else {
+                        self.installBuiltApp(app: derived + "/Build/Products/Release-iphoneos/DmIOS.app", archive: archive, device: device, xcrun: xcrun)
                     }
                 }
             }
