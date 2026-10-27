@@ -290,8 +290,9 @@ final class LibraryTests: XCTestCase {
         XCTAssertNil(DeviceTools.team(fromSubject: "subject=CN=Something"))
     }
 
-    /// An iPhone build with a device and a team: the script prepares the Xcode project, xcodebuild signs it for the
-    /// device, devicectl installs it, and the library opens it there. The tools are stand-ins; nothing is signed.
+    /// An iPhone build with a device and a team: the script prepares the Xcode project, the RomFS archive is packed as for
+    /// sideloading, xcodebuild signs the app without the game files for the device, devicectl installs it and copies the
+    /// archive into its Documents, and the library opens it there. The tools are stand-ins; nothing is signed.
     @MainActor func testBuildSignsAndInstallsOnTheChosenDevice() throws {
         guard FileManager.default.isExecutableFile(atPath: "/usr/bin/python3") else { throw XCTSkip("System Python is required for the process fixture") }
         let saved = ["repoPath", "buildTarget", "buildOutputDirectory", "installDevice", "signingTeam"].map { ($0, UserDefaults.standard.object(forKey: $0)) }
@@ -317,11 +318,19 @@ final class LibraryTests: XCTestCase {
         open('\(calls.path)', 'a').write('script ' + ' '.join(sys.argv[1:]) + '\\n')
         work = pathlib.Path(sys.argv[sys.argv.index('--work-dir') + 1])
         (work / 'xcode/DmIOS.xcodeproj').mkdir(parents=True)
+        (work / 'extract/v0/RomFS').mkdir(parents=True); (work / 'extract/v0/RomFS/data.bin').write_bytes(b'game')
         def ev(**e): print(json.dumps(e), flush=True)
         ev(ev='stage', k=1, n=1, name='prepare Xcode')
         ev(ev='say', msg='[12:00:00] app name: Test; version: 1.0; bundle ID: org.nxnative.test')
         ev(ev='stage_end', k=1, name='prepare Xcode', ok=True, summary='', elapsed=1)
         """.write(to: script, atomically: true, encoding: .utf8)
+        let packer = temporary.appendingPathComponent("dm/tools/romfs_arc.py")   // stand-in: pack <RomFS> <base> writes <base>.idx and one shard
+        try FileManager.default.createDirectory(at: packer.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try """
+        import sys
+        open('\(calls.path)', 'a').write('romfs_arc ' + ' '.join(sys.argv[1:]) + '\\n')
+        open(sys.argv[3] + '.idx', 'wb').write(b'idx'); open(sys.argv[3] + '.00', 'wb').write(b'game')
+        """.write(to: packer, atomically: true, encoding: .utf8)
         let xcrun = temporary.appendingPathComponent("xcrun")
         try """
         #!/usr/bin/python3
@@ -337,6 +346,8 @@ final class LibraryTests: XCTestCase {
             print('CodeSign ' + str(app), flush=True)
         elif a[:3] == ['devicectl', 'device', 'install']:
             print('45%', flush=True); print('App installed', flush=True)
+        elif a[:4] == ['devicectl', 'device', 'copy', 'to']:
+            print('60%', flush=True); print('Copied', flush=True)
         """.write(to: xcrun, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: xcrun.path)
         model.xcrunPath = xcrun.path
@@ -354,12 +365,19 @@ final class LibraryTests: XCTestCase {
         XCTAssertFalse(log[0].contains(" -o "))   // no IPA: the project goes to the device
         let build = try XCTUnwrap(log.first { $0.hasPrefix("xcodebuild -project") })
         for part in ["-scheme Test (0100535012974000)", "-destination id=00008150-AAAA", "-derivedDataPath \(work)/xcode-derived-data",
-                     "-allowProvisioningUpdates", "DEVELOPMENT_TEAM=TEAM123456"] { XCTAssertTrue(build.contains(part), part) }
+                     "-allowProvisioningUpdates", "DEVELOPMENT_TEAM=TEAM123456", "DM_COPY_ROMFS=NO"] { XCTAssertTrue(build.contains(part), part) }
         let app = work + "/xcode-derived-data/Build/Products/Release-iphoneos/DmIOS.app"
+        let archive = temporary.path + "/games/\(titleID)/romfs"
+        // the archive is packed before signing, the app installed before the archive goes into its Documents
+        let order = ["romfs_arc pack", "xcodebuild -project", "devicectl device install", "devicectl device copy"].map { step in log.firstIndex { $0.hasPrefix(step) } }
+        XCTAssertEqual(order.compactMap { $0 }, order.compactMap { $0 }.sorted())
+        XCTAssertEqual(order.compactMap { $0 }.count, 4)
         XCTAssertTrue(log.contains("devicectl device install app --device 00008150-AAAA \(app)"))
+        XCTAssertTrue(log.contains("devicectl device copy to --device 00008150-AAAA --source \(archive) --destination Documents/games/\(titleID)/romfs --domain-type appDataContainer --domain-identifier org.nxnative.test"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: archive + "/romfs.idx"))
+        XCTAssertEqual(model.archivePath, archive)
         XCTAssertEqual(model.installedOn, "00008150-AAAA")
-        XCTAssertEqual(model.stages.filter { $0.id >= 1001 }.map(\.state), [.done, .done])
-        XCTAssertFalse(model.stages.contains { $0.id == 1000 })   // no RomFS archive: the game files are in the app
+        XCTAssertEqual(model.stages.filter { $0.id >= 1000 }.map(\.state), [.done, .done, .done, .done])
         let library = GameLibrary(file: temporary.appendingPathComponent("library.json"))
         model.slots[0].paths = [base.path]
         let id = try XCTUnwrap(library.rememberInputs(model))

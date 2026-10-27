@@ -123,8 +123,8 @@ final class BuildModel: ObservableObject {
     // ---- Installing on an iPhone or iPad (Xcode with a development certificate) ----
     // Optional: with a paired device and a signing team chosen, the script prepares the game's Xcode project
     // (--prepare-xcode, the route its README gives developers), xcodebuild signs it for that device with the
-    // team (Xcode makes the provisioning profile), and devicectl installs it. The game files are inside the app,
-    // so no RomFS copy follows. Without a device or a team the build stays an unsigned IPA, as before.
+    // team (Xcode makes the provisioning profile) without the game files, devicectl installs it and copies the RomFS
+    // archive into its Documents, as a sideloaded copy has it. Without a device or a team the build stays an unsigned IPA, as before.
     @Published var devices: [AppleDevice] = []
     @Published var teams: [SigningTeam] = []
     @Published var devicesChecked = false
@@ -791,7 +791,8 @@ final class BuildModel: ObservableObject {
                         self.running = false
                         self.cleanupStaging()
                     } else if self.installsDirectly {
-                        self.signAndInstall()   // keeps running=true until the app is on the device
+                        // The same archive as for sideloading, then the app without the game files, then the archive into its Documents
+                        self.packArchive(workDir: self.effectiveWorkDir) { self.signAndInstall(archive: $0) }
                     } else {
                         self.packArchive(workDir: self.effectiveWorkDir)   // keeps running=true until the archive is done
                     }
@@ -1042,7 +1043,8 @@ final class BuildModel: ObservableObject {
     /// Pack the extracted RomFS into a ROMFSARC archive. The extracted folder is
     /// <work>/extract/v<N>/RomFS where N is the profile's package version, so take
     /// the highest v* that actually has a RomFS instead of hardcoding one game.
-    private func packArchive(workDir: String) {
+    /// `then` continues the build with the archive's folder (installing on a device) instead of ending it.
+    private func packArchive(workDir: String, then: ((String) -> Void)? = nil) {
         running = true
         let fm = FileManager.default
         let extract = workDir + "/extract"
@@ -1079,6 +1081,7 @@ final class BuildModel: ObservableObject {
             stages.append(Stage(id: 1000, name: t("prog.archive"), state: .done,
                                 detail: String(format: t("prog.archiveReused"), reused)))
             say(String(format: t("msg.archiveReused"), dest))
+            if let then { return then(dest) }
             cleanupStaging()
             finishBuild(ok: true, note: t("msg.done"))
             return
@@ -1110,7 +1113,6 @@ final class BuildModel: ObservableObject {
         }
         p.terminationHandler = { [weak self] st in Self.untrack(st); DispatchQueue.main.async {
             guard let self else { return }
-            self.cleanupStaging()
             let cancelled = self.stopping
             let succeeded = st.terminationStatus == 0 && !cancelled
             self.stopping = false
@@ -1135,6 +1137,8 @@ final class BuildModel: ObservableObject {
                     ? String(format: self.t("prog.archiveDone"), dest)
                     : String(format: self.t("msg.archiveFailed"), st.terminationStatus)
             }
+            if succeeded, let then { return then(dest) }
+            self.cleanupStaging()
             self.running = false
             self.done = succeeded
             if cancelled { self.resetProgress() }
@@ -1151,8 +1155,11 @@ final class BuildModel: ObservableObject {
 
     // MARK: Installing on a device
 
-    /// After the script prepared the Xcode project: sign it for the device, then install it there.
-    private func signAndInstall() {
+    /// After the script prepared the Xcode project and the archive is packed: sign the app for the device without the
+    /// game files (DM_COPY_ROMFS=NO), install it, then copy the archive into its Documents/games/<title ID>/romfs, where
+    /// the app looks first (main.m), as a sideloaded copy has it. devicectl skips files that did not change, so a
+    /// reinstall sends the code and shaders, not the game again.
+    private func signAndInstall(archive: String) {
         let work = effectiveWorkDir, project = work + "/xcode/DmIOS.xcodeproj", derived = work + "/xcode-derived-data"
         let device = installDevice, team = signingTeam, name = deviceName(device), xcrun = xcrunPath
         guard FileManager.default.fileExists(atPath: project) else { return finishInstall(String(format: t("dev.noProject"), shortPath(project))) }
@@ -1162,7 +1169,7 @@ final class BuildModel: ObservableObject {
                 guard let scheme else { return self.finishInstall(String(format: self.t("dev.noProject"), self.shortPath(project))) }
                 let sign = [xcrun, "xcodebuild", "-project", project, "-scheme", scheme, "-configuration", "Release",
                             "-destination", "id=\(device)", "-derivedDataPath", derived, "-allowProvisioningUpdates",
-                            "DEVELOPMENT_TEAM=\(team)", "build"]
+                            "DEVELOPMENT_TEAM=\(team)", "DM_COPY_ROMFS=NO", "build"]
                 self.runTool(id: 1001, name: String(format: self.t("dev.signStage"), name), sign, step: Self.xcodeStep) { error in
                     if let error { return self.finishInstall(String(format: self.t("dev.signFailed"), error)) }
                     let app = derived + "/Build/Products/Release-iphoneos/DmIOS.app"
@@ -1170,9 +1177,17 @@ final class BuildModel: ObservableObject {
                     self.runTool(id: 1002, name: String(format: self.t("dev.installStage"), name),
                                  [xcrun, "devicectl", "device", "install", "app", "--device", device, app], step: Self.installStep) { error in
                         if let error { return self.finishInstall(String(format: self.t("dev.installFailed"), error)) }
-                        self.installedOn = device
-                        self.installedAppPath = app
-                        self.finishInstall(nil)
+                        guard let bundle = NSDictionary(contentsOfFile: app + "/Info.plist")?["CFBundleIdentifier"] as? String else {
+                            return self.finishInstall(String(format: self.t("dev.noProject"), self.shortPath(app + "/Info.plist")))
+                        }
+                        let tid = Self.titleID(self.basePath).map { String(format: "%016llX", $0) } ?? "game"
+                        self.runTool(id: 1003, name: String(format: self.t("dev.copyStage"), name),
+                                     Self.archiveCopy(xcrun: xcrun, device: device, bundle: bundle, archive: archive, titleID: tid), step: Self.installStep) { error in
+                            if let error { return self.finishInstall(String(format: self.t("dev.copyFailed"), error)) }
+                            self.installedOn = device
+                            self.installedAppPath = app
+                            self.finishInstall(nil)
+                        }
                     }
                 }
             }
@@ -1184,6 +1199,12 @@ final class BuildModel: ObservableObject {
         done = failure == nil
         doneNote = failure ?? String(format: t("dev.installed"), deviceName(installDevice))
         cleanupStaging()
+    }
+
+    /// The archive into the installed app's Documents, where main.m looks for this game's files first.
+    nonisolated static func archiveCopy(xcrun: String, device: String, bundle: String, archive: String, titleID: String) -> [String] {
+        [xcrun, "devicectl", "device", "copy", "to", "--device", device, "--source", archive,
+         "--destination", "Documents/games/\(titleID)/romfs", "--domain-type", "appDataContainer", "--domain-identifier", bundle]
     }
 
     /// The scheme the script made for the game ("<name> (<profile>)"), from `xcodebuild -list`.
@@ -1204,7 +1225,7 @@ final class BuildModel: ObservableObject {
     /// What xcodebuild is doing, from the actions it prints.
     nonisolated static func xcodeStep(_ line: String) -> (detail: String, percent: Double?)? {
         let actions = [("CompileC ", "compiling"), ("SwiftCompile ", "compiling"), ("Ld ", "linking"),
-                       ("PhaseScriptExecution ", "copying the game files"), ("CodeSign ", "signing"), ("ProcessProductPackaging ", "provisioning")]
+                       ("PhaseScriptExecution ", "copying resources"), ("CodeSign ", "signing"), ("ProcessProductPackaging ", "provisioning")]
         return actions.first { line.hasPrefix($0.0) }.map { ($0.1, nil) }
     }
 

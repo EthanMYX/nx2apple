@@ -41,9 +41,13 @@ next to it. The script then prepares the game's Xcode project
 (`--prepare-xcode --team-id`, the route it offers developers) instead of an IPA,
 `xcodebuild -allowProvisioningUpdates` signs it for that device with the team
 (Xcode makes the provisioning profile), and `xcrun devicectl device install app`
-installs it. The game files are inside the app, so there is no RomFS to copy;
-installing a large game takes a few minutes. The game then appears in the
-collection, and its button opens it on the device.
+installs it. The game files take the same route as for sideloading. They are packed into
+the RomFS archive, and the app is built without them (`DM_COPY_ROMFS=NO`). After the
+install, `xcrun devicectl device copy to` puts the archive into the app's
+`Documents/games/<title ID>/romfs`, where the app looks first. devicectl skips files
+that did not change, so a reinstall sends the code and shaders, not the whole game
+again. The first copy of a large game takes a few minutes. The game then appears
+in the collection, and its button opens it on the device.
 
 The first time, turn on Developer Mode on the device and trust the developer
 under Settings → General → VPN & Device Management. With a free Apple ID the
