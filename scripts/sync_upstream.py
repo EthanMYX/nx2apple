@@ -379,6 +379,23 @@ def patch_build_ipa(t):
 # games — a full package of a large game is many GB and iOS refuses to install it with
 # PackageExtractionFailed). The default is the slim package: the app reads the game files from
 # Documents/romfs (a directory tree, or a ROMFSARC archive: romfs.idx + romfs.NN shards).'''
+    # Upstream picks the mapping form by what the RomFS path is (a .img file or a folder)
+    old2img = '''if [ -f "$ROMFS" ]; then MAPS=("$P/romfs.img=$ROMFS"); else MAPS=("$P/romfs=$ROMFS"); fi'''
+    if old2img in t:
+        t = t.replace(old2img, '''MAPS=()
+# DM_FULL_ROMFS=1 packs the game files into the package (upstream behaviour; only sensible for small
+# games — a full package of a large game is many GB and iOS refuses to install it with
+# PackageExtractionFailed). The default is the slim package: the app reads them from
+# Documents/games/<id>/ (romfs.img, or a ROMFSARC archive: romfs.idx + romfs.NN shards).
+if [ -n "${DM_FULL_ROMFS:-}" ]; then if [ -f "$ROMFS" ]; then MAPS=("$P/romfs.img=$ROMFS"); else MAPS=("$P/romfs=$ROMFS"); fi; fi''', 1)
+        old3 = '''t "pack IPA (already-compressed game files stored, everything else deflated)"'''
+        if old3 not in t: fail('dm/ios/tools/build_ipa.sh: pack line missing after the MAPS assignment')
+        t = t.replace(old3, '''if [ -n "${DM_FULL_ROMFS:-}" ]; then
+  t "pack full IPA with RomFS (already-compressed game files stored, everything else deflated)"
+else
+  t "pack slim IPA without RomFS (game files come from Documents/romfs; DM_FULL_ROMFS=1 packs them)"
+fi''', 1)
+        return done('build_ipa.sh slim + entitlements', t)
     old2 = '''P=Payload/DmIOS.app; MAPS=("$P/romfs=$ROMFS")'''
     if old2 in t:
         # current upstream: drop the RomFS from the initial assignment, add it back inside the
