@@ -40,11 +40,15 @@ OURS = {'dm/host/romfs_arc.c', 'dm/host/romfs_arc.h', 'dm/tools/romfs_arc.py',
         # silently drop the fix (issue #29, found by v0lumehi reading the sync script). If upstream
         # takes seedds PR for it, these leave OURS and come back with the sync instead.
         'dm/host/hle_time.c', 'dm/host/tests/t_time.c',
+        # dm/games/game.py carries the tex_bc_cpu profile key and the 'profile' subcommand that
+        # writes the runtime profile; both are fork-only, so the file is never taken from upstream
+        # (a verify-only patcher was not enough: the sync replaced it first and then complained).
+        'dm/games/game.py',
         'dm/gfx/tex/tests/t_bcdec.c'}
 # Vendored files that carry fork patches: taken fresh from upstream, then patched below.
 PATCHED = ('dm/host/hle_fs.c', 'dm/host/Makefile', 'dm/host/tests/Makefile', 'dm/ios/tools/build_ipa.sh',
            'scripts/build_ipa_from_nsp.py', 'dm/gfx/tools/shader_split.py',
-           'dm/ios/Sources/main.m', 'dm/gfx/nvn/nvn_mtl.m', 'dm/games/game.py', 'dm/host/dm.h')
+           'dm/ios/Sources/main.m', 'dm/gfx/nvn/nvn_mtl.m', 'dm/host/dm.h')
 
 def git(*a):
     r = subprocess.run(['git', *a], cwd=REPO, capture_output=True, text=True)
@@ -855,22 +859,6 @@ def patch_main_m(t):
         done(f'main.m {name}')
     return t
 
-def patch_game_py(t):
-    """dm/games/game.py carries two fork additions: the tex_bc_cpu profile key (BC decode for
-    GPUs without BC support) and the 'profile' subcommand that writes the runtime profile the
-    host reads from DM_PROFILE. Both are needed by other fork files, so a sync must keep them.
-    """
-    if "a[0] == 'profile'" in t and 'tex_bc_cpu' in t: return skip('game.py (already patched)')
-    bad = []
-    if "'profile'" not in t:
-        bad.append('profile subcommand')
-    if 'tex_bc_cpu' not in t:
-        bad.append('tex_bc_cpu')
-    if bad: fail(f'dm/games/game.py: fork additions missing: {", ".join(bad)} '
-                 '(the sync replaced this file with a version without them; re-apply by hand)')
-    return skip('game.py (fork additions present)')
-
-
 def patch_dm_h(t):
     """dm.h pulls in hle_profile.h, so every host source can call dm_profile().
 
@@ -914,7 +902,6 @@ MARKERS = {
     'dm/gfx/nvn/nvn_mtl.m': 'if (on_sub_thread()) rec_publish();',
     'dm/games/0100A00019DE0000/game.tsv': 'build	v1	1.0.137848',
     'dm/host/dm.h': 'hle_profile.h',
-    'dm/games/game.py': "elif len(a) == 3 and a[0] == 'profile':",
 }
 PATCHERS = {
     'dm/host/hle_fs.c': patch_hle_fs,
@@ -927,7 +914,6 @@ PATCHERS = {
     'dm/gfx/nvn/nvn_mtl.m': patch_nvn_mtl,
     'dm/games/0100A00019DE0000/game.tsv': patch_hades2,
     'dm/host/dm.h': patch_dm_h,
-    'dm/games/game.py': patch_game_py,
 }
 
 report, problems = [], []
