@@ -51,6 +51,7 @@ OURS = {'dm/host/romfs_arc.c', 'dm/host/romfs_arc.h', 'dm/tools/romfs_arc.py',
         # front_mac.m read them. Fork-only until #386 merges, so a sync must not delete them.
         'dm/host/input_map.h',
         'dm/host/tests/t_input_map.c',
+        'dm/host/tests/t_launcher_contract.c',   # the write→read contract with the Controls page
         # The Increased Memory Limit guide the README links to; upstream has no such file, and the
         # first wholesale sync deleted it.
         'dm/ios/ENTITLEMENTS.md',
@@ -382,7 +383,13 @@ def patch_tests_makefile(t):
         if rule_anchor not in t: fail(f'{TESTS_MK}: t_hid rule missing')
         t = t.replace(rule_anchor,
                       '$(B)/t_input_map: t_input_map.c ../input_map.h ../dm_input.h | $(B)\n'
-                      '\tclang -O1 -Wall -Werror -Wno-unused-function -I.. -o $@ t_input_map.c\n' + rule_anchor, 1)
+                      '\tclang -O1 -Wall -Werror -Wno-unused-function -I.. -o $@ t_input_map.c\n'
+                      '$(B)/t_launcher_contract: t_launcher_contract.c ../input_map.h ../dm_input.h | $(B)\n'
+                      '\tclang -O1 -Wall -Werror -Wno-unused-function -I.. -o $@ t_launcher_contract.c\n' + rule_anchor, 1)
+        body_old2 = '\t$(B)/t_input_map\n'
+        t = t.replace(body_old2, body_old2 + '\t$(B)/t_launcher_contract\n', 1)
+        run2 = '$(B)/t_input_map $(B)/t_haptics'
+        if run2 in t: t = t.replace(run2, '$(B)/t_input_map $(B)/t_launcher_contract $(B)/t_haptics', 1)
         done('tests/Makefile input map test')
     # the prerequisites too, so a change to the reader rebuilds them — and hle_profile.h, so a
     # change to the runtime profile does
