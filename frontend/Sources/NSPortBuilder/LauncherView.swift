@@ -36,6 +36,8 @@ struct ContentView: View {
     @State private var optionsFor: UUID?
     @State private var controlsOpen = false
     @StateObject private var controls = ControlLayout()
+    @StateObject private var gamepad = LauncherGamepad()
+    @StateObject private var padFocus = PadFocus()
     @StateObject private var row = RowScroller()
     private var performStartupChecks: Bool
     @Environment(\.scenePhase) private var scenePhase
@@ -68,6 +70,8 @@ struct ContentView: View {
             }
             if m.running || page == .library { activityBar }
         }
+        .padScope("main", padFocus)
+        .environmentObject(padFocus)
         .background(LauncherPalette.background)
         .background(LauncherWindowChrome())
         .ignoresSafeArea(.container, edges: .top)
@@ -76,6 +80,7 @@ struct ContentView: View {
         .font(.manrope(13))   // the default for text without a font of its own
         .frame(minWidth: 900, idealWidth: 1280, minHeight: 680, idealHeight: 900)
         .onAppear {
+            gamepad.perform = padAction
             refreshArtwork()
             if performStartupChecks { library.discover(); fetchArtwork(); m.refreshDevices() }
             if performStartupChecks {
@@ -119,9 +124,15 @@ struct ContentView: View {
             }
         } message: { Text(m.t("library.removeNote")) }
         .sheet(isPresented: Binding(get: { optionsFor != nil }, set: { if !$0 { optionsFor = nil } })) {
-            if let id = optionsFor { LaunchOptionsView(m: m, library: library, gameID: id) }
+            if let id = optionsFor { LaunchOptionsView(m: m, library: library, gameID: id).environmentObject(padFocus) }
         }
-        .sheet(isPresented: $controlsOpen) { ControlsView(m: m, layout: controls) }
+        .sheet(isPresented: $controlsOpen) { ControlsView(m: m, layout: controls).environmentObject(padFocus) }
+        .onChange(of: optionsFor) { id in padFocus.scope = id != nil ? "launch" : (controlsOpen ? "controls" : "main") }
+        .onChange(of: controlsOpen) { open in padFocus.scope = open ? "controls" : (optionsFor != nil ? "launch" : "main") }
+        .onChange(of: page) { _ in padFocus.focused = nil }
+        .onChange(of: padFocus.focused) { id in   // a controller moving onto a game's card selects it, as a click does
+            if let id, id.hasPrefix("card."), let uuid = UUID(uuidString: String(id.dropFirst(5))) { library.selectedID = uuid }
+        }
     }
 
     private var topBar: some View {
@@ -145,6 +156,7 @@ struct ContentView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(page == destination ? .isSelected : [])
+                .padTarget("tab." + destination.rawValue, scope: "main") { page = destination }
             }
             Spacer(minLength: 8)
             searchField
@@ -155,8 +167,9 @@ struct ContentView: View {
                     .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.white.opacity(0.1)))
                     .contentShape(RoundedRectangle(cornerRadius: 8))
             }
-            .padding(.leading, 12)
             .buttonStyle(.plain).disabled(m.running)
+            .padTarget("top.build", scope: "main", radius: 8) { if !m.running { newBuild() } }
+            .padding(.leading, 12)
         }
         .padding(.leading, 90).padding(.trailing, 24)
         .frame(height: 64)
@@ -278,6 +291,7 @@ struct ContentView: View {
                     }
                     .buttonStyle(.plain).disabled(launching || (m.running && !game.isReady))
                     .keyboardShortcut(.return, modifiers: [])
+                    .padTarget("hero.play", scope: "main", radius: 30) { if !launching { primaryAction(game) } }
                     if game.isReady {
                         Button { optionsFor = game.id } label: {
                             Image(systemName: "slider.horizontal.3").font(.system(size: 17))
@@ -286,6 +300,7 @@ struct ContentView: View {
                                 .overlay(Circle().strokeBorder(Color.white.opacity(0.14)))
                         }
                         .buttonStyle(.plain).help(m.t("launch.title")).accessibilityLabel(m.t("launch.title"))
+                        .padTarget("hero.options", scope: "main", radius: 24) { optionsFor = game.id }
                     }
                     Menu {
                         Button(m.t("library.buildAgain")) { configureBuild(game) }.disabled(m.running || game.inputs["base", default: []].isEmpty)
@@ -328,6 +343,7 @@ struct ContentView: View {
             if filteredGames.isEmpty {
                 Text(m.t("library.noResults")).foregroundStyle(.secondary).padding(.vertical, 28)
             } else {
+                ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
                         HStack(alignment: .top, spacing: 14) {
                             ForEach(filteredGames) { game in
@@ -354,11 +370,20 @@ struct ContentView: View {
                                 }
                                 .buttonStyle(.plain)
                                 .accessibilityAddTraits(game.id == library.selectedID ? .isSelected : [])
+                                .padTarget("card." + game.id.uuidString, scope: "main", radius: 7) { if !launching { primaryAction(game) } }
                             }
                         }
-                        .padding(.bottom, 5)
+                        // Room for the controller's focus ring, which sits 4 pt outside a card: the row clips at its edges, so it
+                        // gets the room inside and gives it back outside (the cards stay where they were)
+                        .padding(.horizontal, Self.ringRoom).padding(.top, Self.ringRoom).padding(.bottom, 5 + Self.ringRoom)
                         .background(EnclosingScrollView(row: row))
                     }
+                    .padding(.horizontal, -Self.ringRoom).padding(.vertical, -Self.ringRoom)
+                    .onChange(of: padFocus.focused) { id in   // the focused card scrolls into the row's view
+                        guard let id, id.hasPrefix("card.") else { return }
+                        withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(id, anchor: .center) }
+                    }
+                }
                     .overlay(alignment: .topLeading) {
                         if row.canBack {
                             pager("chevron.left", height: cardWidth / 1.8) { row.page(-1, step: step) }.offset(x: -22)
@@ -431,9 +456,24 @@ struct ContentView: View {
                     Image(systemName: "desktopcomputer").foregroundStyle(.secondary)
                     Text(m.t("library.localNote")).font(.manrope(13)).foregroundStyle(.secondary)
                     Spacer()
+                    if gamepad.connected {
+                        // The buttons a controller has here, named as the game names them (A on the right)
+                        HStack(spacing: 18) {
+                            padHint("A", m.t("pad.play")); padHint("X", m.t("pad.options")); padHint("B", m.t("pad.back"))
+                            Image(systemName: "gamecontroller").foregroundStyle(.secondary)
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 30).frame(height: 84)
+        }
+    }
+
+    private func padHint(_ button: String, _ label: String) -> some View {
+        HStack(spacing: 7) {
+            Text(button).font(.manrope(11, .bold)).foregroundStyle(.black)
+                .frame(width: 20, height: 20).background(LauncherPalette.cream.opacity(0.9), in: Circle())
+            Text(label).font(.manrope(13)).foregroundStyle(.secondary)
         }
     }
 
@@ -463,6 +503,41 @@ struct ContentView: View {
         m.target = game.lastTarget
         page = .builds
     }
+
+    /// A controller's button (LauncherGamepad): the first press shows the focus (on the selected game's card in the library),
+    /// then the D-pad moves it (PadFocus), A activates, B closes a sheet or goes back to the library, X opens the selected
+    /// game's launch options, L and R switch the pages.
+    private func padAction(_ action: LauncherGamepad.Action) {
+        let sheetOpen = optionsFor != nil || controlsOpen
+        if action == .b {
+            if optionsFor != nil { optionsFor = nil } else if controlsOpen { controlsOpen = false }
+            else if searching { searching = false; search = "" } else if page != .library { page = .library }
+            return
+        }
+        if removing != nil { return }   // the remove dialog is AppKit's; it takes the mouse or the keyboard
+        if !padFocus.visible {
+            padFocus.show(default: !sheetOpen && page == .library ? library.selectedID.map { "card." + $0.uuidString } : nil)
+            if [.up, .down, .left, .right].contains(action) { return }   // the first press only shows where the focus is
+        }
+        switch action {
+        case .up: padFocus.move(dx: 0, dy: -1)
+        case .down: padFocus.move(dx: 0, dy: 1)
+        case .left: padFocus.horizontal(-1)
+        case .right: padFocus.horizontal(1)
+        case .a: padFocus.activate()
+        case .x:
+            if !sheetOpen, let game = library.selected, game.isReady { optionsFor = game.id }
+        case .l, .r:
+            guard !sheetOpen, let at = LauncherPage.allCases.firstIndex(of: page) else { return }
+            let pages = LauncherPage.allCases
+            page = pages[(at + (action == .l ? pages.count - 1 : 1)) % pages.count]
+        case .b, .y:
+            return
+        }
+    }
+
+    /// The space the collection row keeps around its cards for the focus ring (PadFocus draws it 4 pt outside a target).
+    static let ringRoom: CGFloat = 6
 
     private func primaryAction(_ game: LibraryGame) {
         if !game.isReady && game.onDevice {   // installed on a device: start it there

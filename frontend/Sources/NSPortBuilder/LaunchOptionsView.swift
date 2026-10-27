@@ -10,6 +10,7 @@ struct LaunchOptionsView: View {
     let gameID: UUID
     @Environment(\.dismiss) private var dismiss
     @State private var advancedOpen = false
+    @EnvironmentObject private var focus: PadFocus
 
     private var game: LibraryGame? { library.games.first { $0.id == gameID } }
     private var settings: [LaunchSetting]? {
@@ -27,6 +28,7 @@ struct LaunchOptionsView: View {
             }
             .padding(.horizontal, 30).padding(.top, 28).padding(.bottom, 20)
             if let settings, !settings.isEmpty, let game {
+                ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
                         groups(settings.filter(\.isBasic), game, all: settings)
@@ -44,11 +46,14 @@ struct LaunchOptionsView: View {
                                     .padding(.horizontal, 18).frame(minHeight: 52).contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
+                                .padTarget("opt.advanced", scope: "launch", radius: 14) { withAnimation(.easeInOut(duration: 0.18)) { advancedOpen.toggle() } }
                             }
                             if advancedOpen { groups(advanced, game, all: settings) }
                         }
                     }
                     .padding(.horizontal, 30).padding(.bottom, 24)
+                }
+                .onChange(of: focus.focused) { id in if let id { withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .center) } } }
                 }
             } else {
                 Text(m.t("launch.none")).font(.manrope(14)).foregroundStyle(.secondary)
@@ -62,6 +67,7 @@ struct LaunchOptionsView: View {
                 if let game, !game.launchOptions.isEmpty {
                     Button(m.t("launch.reset")) { library.resetLaunchOptions(for: gameID) }
                         .buttonStyle(LauncherSecondaryButtonStyle())
+                        .padTarget("opt.reset", scope: "launch") { library.resetLaunchOptions(for: gameID) }
                 }
                 Button { dismiss() } label: {
                     Text(m.t("launch.done")).font(.manrope(13.5, .bold)).foregroundStyle(.black)
@@ -69,9 +75,11 @@ struct LaunchOptionsView: View {
                         .background(LauncherPalette.cream, in: Capsule())
                 }
                 .buttonStyle(.plain).keyboardShortcut(.defaultAction)
+                .padTarget("opt.done", scope: "launch", radius: 20) { dismiss() }
             }
             .padding(.horizontal, 30).padding(.vertical, 16)
         }
+        .padScope("launch", focus)
         .frame(width: 600, height: 700)
         .background(LauncherPalette.background)
         .font(.manrope(13))
@@ -139,6 +147,24 @@ struct LaunchOptionsView: View {
         }
         .padding(.horizontal, 18).padding(.vertical, 13)
         .frame(minHeight: 52)
+        .padTarget("opt." + s.env, scope: "launch", radius: 10, activate: { step(s, value, 1) }, adjust: { step(s, value, $0) })
+    }
+
+    /// A controller's step through a setting: the next or previous choice (wrapping), the slider by its step, the switch flipped.
+    private func step(_ s: LaunchSetting, _ value: String, _ by: Int) {
+        switch s.kind {
+        case "choice":
+            let values = (s.options ?? []).map { $0[0] }
+            guard !values.isEmpty else { return }
+            let at = values.firstIndex(of: value) ?? 0
+            set(s, values[(at + by + values.count) % values.count])
+        case "range":
+            let lo = s.min ?? 0, hi = s.max ?? 1, st = s.step ?? 0.05
+            let next = min(max(((Double(value) ?? lo) / st).rounded() * st + Double(by) * st, lo), hi)
+            set(s, String(format: "%.2f", next))
+        default:
+            set(s, value == s.onValue ? s.offValue : s.onValue)
+        }
     }
 
     /// The setting's control, filling the column every row shares (a toggle keeps its size at the column's right edge).
