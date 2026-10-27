@@ -39,12 +39,15 @@ struct ContentView: View {
     @StateObject private var gamepad = LauncherGamepad()
     @StateObject private var padFocus = PadFocus()
     @StateObject private var row = RowScroller()
+    @StateObject private var toolsAge: ToolsAge
+    @State private var buildCommit = ""   // the checkout's commit when the running build started (ToolsAge)
     private var performStartupChecks: Bool
     @Environment(\.scenePhase) private var scenePhase
 
     init(model: BuildModel? = nil, library: GameLibrary? = nil, initialPage: LauncherPage = .library,
-         activeBuildID: UUID? = nil, performStartupChecks: Bool = true, search: String? = nil) {
+         activeBuildID: UUID? = nil, performStartupChecks: Bool = true, search: String? = nil, olderTools: Set<UUID> = []) {
         if let search { _search = State(initialValue: search); _searching = State(initialValue: true) }   // visual QA: the bar with its field open
+        _toolsAge = StateObject(wrappedValue: ToolsAge(older: olderTools))   // visual QA: games marked without a checkout to compare
         _m = StateObject(wrappedValue: model ?? BuildModel())
         _library = StateObject(wrappedValue: library ?? GameLibrary())
         _page = State(initialValue: initialPage)
@@ -82,7 +85,7 @@ struct ContentView: View {
         .onAppear {
             gamepad.perform = padAction
             refreshArtwork()
-            if performStartupChecks { library.discover(); fetchArtwork(); m.refreshDevices() }
+            if performStartupChecks { library.discover(); fetchArtwork(); m.refreshDevices(); checkTools() }
             if performStartupChecks {
                 m.checkDeps()
                 if m.repoOK && m.repoIsGit { m.checkRepoUpdates(silent: true) }
@@ -100,9 +103,19 @@ struct ContentView: View {
             refreshArtwork()
             if performStartupChecks { fetchArtwork() }
         }
-        .onChange(of: m.repoPath) { _ in refreshArtwork() }
+        .onChange(of: m.repoPath) { _ in refreshArtwork(); if performStartupChecks { checkTools() } }
+        // A clone, pull or update check has finished (the automatic pull at launch among them): the checkout may have moved
+        .onReceive(m.$repoBusy.removeDuplicates().dropFirst()) { busy in if !busy && performStartupChecks { checkTools() } }
         .onReceive(m.$running.removeDuplicates()) { running in
             if running && activeBuildID == nil { activeBuildID = library.rememberInputs(m) }
+            if running && activeBuildID != nil {   // the tools this build runs: a pull waits for the build (pullRepo, autoPull)
+                buildCommit = ""
+                let repo = m.repoPath
+                DispatchQueue.global(qos: .utility).async {
+                    let commit = ToolsAge.head(repo: repo) ?? ""
+                    DispatchQueue.main.async { buildCommit = commit }
+                }
+            }
             if !running {
                 DispatchQueue.main.async {
                     if m.done { recordBuild() }
@@ -290,7 +303,21 @@ struct ContentView: View {
                            startPoint: .top, endPoint: .bottom)
             LinearGradient(colors: [.black.opacity(0.24), .clear], startPoint: .leading, endPoint: .trailing)
             VStack(alignment: .leading, spacing: 14) {
-                status(game, prominent: true)
+                HStack(spacing: 14) {
+                    status(game, prominent: true)
+                    if toolsAge.older.contains(game.id) && !(m.running && activeBuildID == game.id) {
+                        Button { configureBuild(game) } label: {
+                            Label(m.t("library.rebuildShort"), systemImage: "arrow.clockwise")
+                                .font(.manrope(12, .semibold)).foregroundStyle(LauncherPalette.cream)
+                                .padding(.horizontal, 10).padding(.vertical, 4)
+                                .overlay(Capsule().strokeBorder(LauncherPalette.cream.opacity(0.35)))
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain).disabled(m.running || game.inputs["base", default: []].isEmpty)
+                        .help(m.t("library.olderToolsHelp"))
+                        .padTarget("hero.rebuild", scope: "main", radius: 12) { if !m.running { configureBuild(game) } }
+                    }
+                }
                 Text(game.name).font(.manrope(min(68, width * 0.052), .heavy))
                     .tracking(-1.6).lineLimit(2).shadow(color: .black.opacity(0.25), radius: 12)
                 HStack(spacing: 18) {
@@ -318,7 +345,7 @@ struct ContentView: View {
                         .padTarget("hero.options", scope: "main", radius: 24) { optionsFor = game.id }
                     }
                     Menu {
-                        Button(m.t("library.buildAgain")) { configureBuild(game) }.disabled(m.running || game.inputs["base", default: []].isEmpty)
+                        Button(m.t(toolsAge.older.contains(game.id) ? "library.rebuild" : "library.buildAgain")) { configureBuild(game) }.disabled(m.running || game.inputs["base", default: []].isEmpty)
                         if game.isReady { Button(m.t("launch.title")) { optionsFor = game.id } }
                         Button(m.t("library.changeArtwork")) { chooseArtwork(game) }
                         if !game.artworkPath.isEmpty {
@@ -440,6 +467,11 @@ struct ContentView: View {
                 .font(prominent ? .manrope(12, .bold) : .manrope(13, .medium))
                 .tracking(prominent ? 1.3 : 0)   // the eyebrow: the same face, in tracked capitals
                 .foregroundStyle(color)
+            if !building && toolsAge.older.contains(game.id) {   // a quiet note beside the status, not a warning
+                Text("· " + m.t(prominent ? "library.olderTools" : "library.olderToolsShort"))
+                    .font(.manrope(prominent ? 13 : 12)).foregroundStyle(.secondary).lineLimit(1)
+                    .help(m.t("library.olderToolsHelp"))
+            }
         }
         .accessibilityElement(children: .combine)
     }
@@ -605,10 +637,13 @@ struct ContentView: View {
 
     private func recordBuild() {
         guard m.done, let id = activeBuildID else { return }
-        if m.target == "mac-app" { library.recordCompletedApp(path: m.macAppPath, for: id) }
-        else { library.recordCompletedIOS(ipa: m.ipaPath, archive: m.archivePath, app: m.installedAppPath, device: m.installedOn, for: id) }
+        if m.target == "mac-app" { library.recordCompletedApp(path: m.macAppPath, commit: buildCommit, for: id) }
+        else { library.recordCompletedIOS(ipa: m.ipaPath, archive: m.archivePath, app: m.installedAppPath, device: m.installedOn, commit: buildCommit, for: id) }
         refreshArtwork()
+        if performStartupChecks { checkTools() }
     }
+
+    private func checkTools() { toolsAge.check(games: library.games, repo: m.repoPath) }
 
     private func refreshArtwork() {
         artwork = Dictionary(uniqueKeysWithValues: library.games.compactMap { game in

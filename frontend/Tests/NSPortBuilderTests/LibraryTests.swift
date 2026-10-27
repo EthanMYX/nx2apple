@@ -650,9 +650,10 @@ final class LibraryTests: XCTestCase {
         model.slots[0].paths = []
         library.selectedID = library.games.first?.id
         func capture(_ name: String, width: CGFloat = 1440, height: CGFloat = 1024, page: LauncherPage = .library, activeID: UUID? = nil, empty: Bool = false,
-                     search: String? = nil) throws {
+                     search: String? = nil, older: Set<UUID> = []) throws {
             let store = empty ? GameLibrary(file: temporary.appendingPathComponent("empty.json")) : library
-            let view = ContentView(model: model, library: store, initialPage: page, activeBuildID: activeID, performStartupChecks: false, search: search)
+            let view = ContentView(model: model, library: store, initialPage: page, activeBuildID: activeID, performStartupChecks: false, search: search,
+                                   olderTools: older)
             let host = NSHostingView(rootView: view)
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
                                   styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
@@ -687,6 +688,12 @@ final class LibraryTests: XCTestCase {
             try capture("settings-update-ready", page: .settings)
             try capture("library-update-ready")
         }
+        // Games built with older build tools (ToolsAge): the selected one rebuilt from its own inputs, as a recorded build has them
+        model.slots[0].paths = ["/preview/Hades [\(titleID)].nsp"]
+        _ = library.rememberInputs(model)
+        model.slots[0].paths = []
+        try capture("library-older-tools", older: [library.games[0].id, library.games[1].id])
+        try capture("library-older-tools-small", width: 900, height: 680, older: [library.games[0].id, library.games[1].id])
         // An iPhone build with a paired device and a team (example values)
         let previousTarget = model.target
         model.target = "ios"
