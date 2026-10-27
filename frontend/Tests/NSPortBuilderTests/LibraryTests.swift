@@ -398,6 +398,18 @@ final class LibraryTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), data)
     }
 
+    func testInstalledAppsAreFoundAtTopLevelOnly() throws {
+        let app = try makeApp(titleID)
+        let apps = temporary.appendingPathComponent("Applications")
+        try FileManager.default.createDirectory(at: apps.appendingPathComponent("Games"), withIntermediateDirectories: true)
+        let installed = apps.appendingPathComponent(app.lastPathComponent)
+        try FileManager.default.copyItem(at: app, to: installed)
+        try FileManager.default.moveItem(at: app, to: apps.appendingPathComponent("Games/" + app.lastPathComponent))
+        let missing = temporary.appendingPathComponent("NoSuchFolder")
+        XCTAssertEqual(GameLibrary.installedApps(in: [apps, missing]).map { $0.resolvingSymlinksInPath().path },
+                       [installed.resolvingSymlinksInPath().path])
+    }
+
     func testFolderDiscoveryPrunesGameContentsAndRemembersLocation() throws {
         let app = try makeApp(titleID)
         let nested = temporary.appendingPathComponent("My games/Hades/mac")
@@ -411,6 +423,7 @@ final class LibraryTests: XCTestCase {
         XCTAssertTrue(GameLibrary.builtApps(in: temporary.appendingPathComponent("unmounted-volume")).isEmpty)
         let state = temporary.appendingPathComponent("library.json")
         let library = GameLibrary(file: state)
+        library.applicationFolders = []   // the machine's own /Applications is not part of this test
         let finished = expectation(description: "Folder scan completes")
         let token = library.$scanning.dropFirst().filter { !$0 }.sink { _ in finished.fulfill() }
         library.setFolder(temporary)
