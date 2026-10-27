@@ -35,6 +35,11 @@ OURS = {'dm/host/romfs_arc.c', 'dm/host/romfs_arc.h', 'dm/tools/romfs_arc.py',
         # BC decode for GPUs without BC support (from d2r-mobile's bcdec line; tex_bc_cpu profiles)
         'dm/third_party/bcdec/bcdec.h', 'dm/third_party/bcdec/LICENSE',
         'dm/gfx/tex/nvn_bcdec.c', 'dm/gfx/tex/nvn_bcdec.h',
+        # The adjustable clock entry (PR #26) and its test are fork-only for now: upstream does not
+        # have CreateWithAdjustableSystemClock, so a sync would otherwise replace these files and
+        # silently drop the fix (issue #29, found by v0lumehi reading the sync script). If upstream
+        # takes seedds PR for it, these leave OURS and come back with the sync instead.
+        'dm/host/hle_time.c', 'dm/host/tests/t_time.c',
         'dm/gfx/tex/tests/t_bcdec.c'}
 # Vendored files that carry fork patches: taken fresh from upstream, then patched below.
 PATCHED = ('dm/host/hle_fs.c', 'dm/host/Makefile', 'dm/host/tests/Makefile', 'dm/ios/tools/build_ipa.sh',
