@@ -21,11 +21,6 @@
 
 <img src="frontend/screenshots/hero-features.png" width="100%" alt="NX2Apple — Switch 游戏装进 iPhone">
 
-> **v0.4.5 新增**
->
-> - 可输出 Mac App
-> - 支持老的 iPhone 和 iPad，构建时开启 BC 纹理
-
 
 一个 macOS App 拿你自己导出的游戏文件，点几下就把整件事做完——解包、为 Apple 芯片重写游戏代码、把
 shader 翻译成 Metal、打包出装得进手机的瘦身 IPA 和分片 RomFS 归档（16 GB 的大作也装得上），最后告诉

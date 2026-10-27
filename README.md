@@ -21,11 +21,6 @@
 
 <img src="frontend/screenshots/hero-features-en.png" width="100%" alt="NX2Apple — Switch games on your iPhone">
 
-> **New in v0.4.5**
->
-> - **Mac app output** — build a double-clickable `.app` instead of an IPA
-> - **Older iPhones and iPads** — turn on BC texture decoding when building
-
 
 A macOS app takes your own game dumps and does the whole thing with a few clicks — unpack, rewrite
 the game's code for Apple silicon, translate its shaders to Metal, pack a slim IPA plus a sharded
