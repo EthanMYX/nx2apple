@@ -109,9 +109,12 @@ private struct GameDataSection: View {
     }
 
     private func refresh() {
-        var stale = false
+        // ObjC BOOL* is ObjCBool, not Bool: the bookmark header takes an indirect flag for
+        // "the bookmark exists but does not resolve under this signature", which is the one
+        // state worth telling the player about.
+        var stale: ObjCBool = false
         picked = dm_picked_data_path(&stale) ?? ""
-        if stale && picked.isEmpty {
+        if stale.boolValue && picked.isEmpty {
             note = "The location you picked before is no longer readable (the app was signed differently). Please choose it again."
         }
     }
