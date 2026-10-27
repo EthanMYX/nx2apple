@@ -705,6 +705,23 @@ final class LibraryTests: XCTestCase {
         model.installDevice = "00008150-AAAA"; model.signingTeam = "TEAM123456"
         try capture("build-install", height: 1300, page: .builds)
         model.installDevice = previousDevice; model.signingTeam = previousTeam; model.target = previousTarget
+        // The Free space sheet with a measured build folder (example sizes), two parts picked, then while a build runs
+        let measured = BuildFolderSurvey(folder: "/Volumes/Games/Hades/\(titleID)_build",
+                                         sizes: [.extracted: 9_800_000_000, .shaders: 1_450_000_000, .xcode: 2_100_000_000, .caches: 610_000_000], kept: 48_000_000)
+        for (name, running) in [("free-space", false), ("free-space-running", true)] {
+            model.running = running
+            let sheet = NSHostingView(rootView: FreeSpaceView(m: model, game: library.games[0], survey: measured, chosen: [.extracted, .xcode])
+                .environmentObject(PadFocus()))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 690), styleMask: [.titled], backing: .buffered, defer: false)
+            window.contentView = sheet
+            window.orderFront(nil)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+            let rep = try XCTUnwrap(sheet.bitmapImageRepForCachingDisplay(in: sheet.bounds))
+            sheet.cacheDisplay(in: sheet.bounds, to: rep)
+            try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent(name + ".png"))
+            window.orderOut(nil)
+        }
+        model.running = false
         if let json = ProcessInfo.processInfo.environment["NX_LAUNCHER_CAPTURE_SETTINGS"] {   // a launcher.json from dm/games/settings.py
             let first = library.games[0]
             let dm = URL(fileURLWithPath: first.appPath).appendingPathComponent("Contents/Resources/dm")

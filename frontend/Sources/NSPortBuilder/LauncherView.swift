@@ -34,6 +34,7 @@ struct ContentView: View {
     @State private var launchError: String?
     @State private var removing: LibraryGame?
     @State private var optionsFor: UUID?
+    @State private var freeSpaceFor: UUID?   // the game whose Free space sheet is open
     @State private var controlsOpen = false
     @StateObject private var controls = ControlLayout()
     @StateObject private var gamepad = LauncherGamepad()
@@ -147,6 +148,10 @@ struct ContentView: View {
             if let id = optionsFor { LaunchOptionsView(m: m, library: library, gameID: id).environmentObject(padFocus) }
         }
         .sheet(isPresented: $controlsOpen) { ControlsView(m: m, layout: controls).environmentObject(padFocus) }
+        .sheet(isPresented: Binding(get: { freeSpaceFor != nil }, set: { if !$0 { freeSpaceFor = nil } })) {
+            if let game = library.games.first(where: { $0.id == freeSpaceFor }) { FreeSpaceView(m: m, game: game).environmentObject(padFocus) }
+        }
+        .onChange(of: freeSpaceFor) { id in padFocus.scope = id != nil ? "free" : "main" }
         .sheet(isPresented: $m.showUpdateSheet) { UpdateSheet(m: m) }
         .onChange(of: optionsFor) { id in padFocus.scope = id != nil ? "launch" : (controlsOpen ? "controls" : "main") }
         .onChange(of: controlsOpen) { open in padFocus.scope = open ? "controls" : (optionsFor != nil ? "launch" : "main") }
@@ -356,6 +361,7 @@ struct ContentView: View {
                                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: game.appPath)])
                             }
                         }
+                        if BuildFolder.location(for: game) != nil { Button(m.t("free.menu")) { freeSpaceFor = game.id } }
                         Divider()
                         Button(m.t("library.remove"), role: .destructive) { removing = game }.disabled(game.id == activeBuildID)
                     } label: {
@@ -570,6 +576,8 @@ struct ContentView: View {
     /// game's launch options, L and R switch the pages.
     private func padAction(_ action: LauncherGamepad.Action) {
         let sheetOpen = optionsFor != nil || controlsOpen
+        // The Free space sheet: B closes it, the D-pad and A work in it, X, L and R do nothing behind it
+        if freeSpaceFor != nil && [.b, .x, .l, .r].contains(action) { if action == .b { freeSpaceFor = nil }; return }
         if action == .b {
             if optionsFor != nil { optionsFor = nil } else if controlsOpen { controlsOpen = false }
             else if searching { searching = false; search = "" } else if page != .library { page = .library }
