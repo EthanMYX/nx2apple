@@ -549,6 +549,24 @@ final class LibraryTests: XCTestCase {
             try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent("launch-options.png"))
             window.orderOut(nil)
         }
+        do {   // the Controls sheet with a few changes, kept in a suite of its own
+            let suite = "nxnative-visual-qa-controls"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defaults.removePersistentDomain(forName: suite)
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let layout = ControlLayout(defaults: defaults)
+            if let up = ControlLayout.functions.first(where: { $0.id == "RUp" }) { layout.assign(up, key: 34) }
+            layout.setSends("A", "B"); layout.setSends("B", "A")
+            let host = NSHostingView(rootView: ControlsView(m: model, layout: layout))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
+            window.contentView = host
+            window.orderFront(nil)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+            let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: rep)
+            try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent("controls.png"))
+            window.orderOut(nil)
+        }
         let crowded = GameLibrary(file: temporary.appendingPathComponent("crowded.json"))   // more games than the row shows: its pager chevrons
         for (index, name) in ["Hades", "Metroid Dread", "Bayonetta 3", "Pikmin 4", "Splatoon 3", "Kirby and the Forgotten Land", "Xenoblade Chronicles 3", "Fire Emblem Engage"].enumerated() {
             model.slots[0].paths = ["/preview/\(name) [01000000000\(String(format: "%02X", index))000].nsp"]

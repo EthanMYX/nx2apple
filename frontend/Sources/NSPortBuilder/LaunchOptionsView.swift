@@ -87,29 +87,36 @@ struct LaunchOptionsView: View {
                 }
             }
             Spacer(minLength: 12)
+            control(s, value).frame(width: LaunchControl.width, alignment: .trailing)
+        }
+        .padding(.horizontal, 18).padding(.vertical, 13)
+        .frame(minHeight: 52)
+    }
+
+    /// The setting's control, filling the column every row shares (a toggle keeps its size at the column's right edge).
+    @ViewBuilder private func control(_ s: LaunchSetting, _ value: String) -> some View {
+        HStack(spacing: 10) {
             switch s.kind {
             case "choice":
                 let options = (s.options ?? []).map { (value: $0[0], label: $0.count > 1 ? $0[1] : $0[0]) }
                 if options.count <= 3 {
                     LauncherSegmented(options: options, selection: value) { set(s, $0) }
                 } else {
-                    LauncherMenuPicker(options: options, selection: value) { set(s, $0) }
+                    LauncherMenuPicker(options: options, selection: value, fill: true) { set(s, $0) }
                 }
             case "range":
                 let lo = s.min ?? 0, hi = s.max ?? 1
                 LauncherSlider(value: Double(value) ?? Double(s.def) ?? lo, range: lo...hi, step: s.step ?? 0.05) {
                     set(s, String(format: "%.2f", $0))
                 }
-                .frame(width: 170)
                 Text("\(Int(((Double(value) ?? 0) * 100).rounded()))%")
                     .font(.manrope(13, .semibold)).monospacedDigit().foregroundStyle(.secondary)
                     .frame(width: 44, alignment: .trailing)
             default:
+                Spacer(minLength: 0)
                 Toggle("", isOn: Binding(get: { value == s.onValue }, set: { set(s, $0 ? s.onValue : s.offValue) }))
                     .labelsHidden().toggleStyle(LauncherSwitchStyle())
             }
         }
-        .padding(.horizontal, 18).padding(.vertical, 13)
-        .frame(minHeight: 52)
     }
 }

@@ -1479,6 +1479,8 @@ struct BuilderView: View {
     var onViewGame: () -> Void = {}
     var onOpenSettings: () -> Void = {}
     var onChooseLibraryFolder: () -> Void = {}
+    var onOpenControls: () -> Void = {}
+    var controlChanges = 0
     @State private var extrasOpen = false
     @State private var logOpen = false
 
@@ -1815,8 +1817,15 @@ struct BuilderView: View {
 
     // ---- Settings ----
 
+    /// Every button of the Settings cards is this wide, so they stand in one column.
+    static let settingsButtonWidth: CGFloat = 150
+
     @ViewBuilder private var settingsPage: some View {
         pageHeading(m.t("settings.heading"), note: m.t("settings.note"))
+        settingsCards.buttonStyle(LauncherSecondaryButtonStyle(minWidth: Self.settingsButtonWidth))
+    }
+
+    @ViewBuilder private var settingsCards: some View {
         group(m.t("section.library"), footnote: m.t("library.folderHint")) {
             row(m.t("library.folderTitle"), detail: library.folder.isEmpty ? m.t("library.folderUnset") : m.shortPath(library.folder),
                 dot: library.folder.isEmpty ? LauncherPalette.unbuilt : LauncherPalette.ready, help: library.folder) {
@@ -1827,6 +1836,11 @@ struct BuilderView: View {
                 Button(m.t("library.chooseFolder"), action: onChooseLibraryFolder)
             }
         }
+        group(m.t("section.controls"), footnote: m.t("controls.settingsHint")) {
+            row(m.t("controls.row"), detail: controlChanges == 0 ? m.t("controls.defaultLayout") : String(format: m.t("controls.changes"), controlChanges)) {
+                Button(m.t("controls.customize"), action: onOpenControls)
+            }
+        }
         tools
         group(m.t("section.app"), footnote: m.appStatus) {
             // The interface language: the device default unless someone picks one here. Stored as
@@ -1834,18 +1848,17 @@ struct BuilderView: View {
             row(m.t("settings.language"),
                 detail: Lang.saved.map { $0 == .zh ? m.t("settings.language.zh") : m.t("settings.language.en") }
                     ?? m.t("settings.language.system"), dot: LauncherPalette.ready, help: "") {
-                Picker("", selection: Binding(
-                    get: { Lang.saved.map { $0.rawValue } ?? "" },
-                    set: { v in
-                        Lang.saved = v.isEmpty ? nil : Lang(rawValue: v)
-                        m.lang = Lang.initial()
-                    })) {
-                    Text(m.t("settings.language.system")).tag("")
-                    Text(m.t("settings.language.zh")).tag("zh")
-                    Text(m.t("settings.language.en")).tag("en")
+                // The launcher's own list (as in Launch options), drawn like the buttons beside it and as wide
+                LauncherMenuPicker(options: [(value: "", label: m.t("settings.language.system")),
+                                             (value: "zh", label: m.t("settings.language.zh")),
+                                             (value: "en", label: m.t("settings.language.en"))],
+                                   selection: Lang.saved.map { $0.rawValue } ?? "", fill: true, buttonLike: true) { v in
+                    Lang.saved = v.isEmpty ? nil : Lang(rawValue: v)
+                    m.lang = Lang.initial()
                 }
-                .pickerStyle(.menu).labelsHidden().frame(width: 150)
+                .frame(width: Self.settingsButtonWidth)
             }
+            divider
             row("NX2Apple", detail: String(format: m.t("app.version"), BuildModel.appVersion)) {
                 if let u = m.appUpdate {
                     Button(String(format: m.t("app.updateBtn"), u.tag)) { m.performAppUpdate() }.disabled(m.appBusy)
