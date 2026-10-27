@@ -516,8 +516,8 @@ def patch_nsp(t):
             del env['DOTNET_ROOT']; os.environ.pop('DOTNET_ROOT', None)
             say('DOTNET_ROOT: removed (none verified — the apphost searches its default locations)')""")]))
     P.append(('pwd import', 'import ast, collections, ctypes, getpass, pwd', [(
-        "import ast, collections, ctypes, getpass, hashlib, importlib.util, json, os, re, shlex, shutil, struct, subprocess, sys, tempfile, threading, time, types, zlib",
-        "import ast, collections, ctypes, getpass, pwd, hashlib, importlib.util, json, os, re, shlex, shutil, struct, subprocess, sys, tempfile, threading, time, types, zlib")]))
+        "import ast, collections, ctypes, getpass, hashlib, importlib.util, json, os, re, shlex, shutil, struct, subprocess, sys, tempfile, threading, time, types",
+        "import ast, collections, ctypes, getpass, pwd, hashlib, importlib.util, json, os, re, shlex, shutil, struct, subprocess, sys, tempfile, threading, time, types")]))
     # HOME can be missing or empty under a GUI launch (issue #10): .NET's first-run configure then
     # builds a mutex path from "" and dies with NuGet-Migrations + lstat("") before reading a project.
     P.append(('HOME fallback', 'DOTNET_CLI_HOME', [(
