@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🎮 NX2Apple
+# NX2Apple
 
 **Your Switch games, running on your iPhone.**
 
@@ -20,8 +20,8 @@
 
 > **New in v0.4.5**
 >
-> - 🖥️ **Mac app output** — build a double-clickable `.app` instead of an IPA
-> - 📱 **Older iPhones and iPads** — turn on BC texture decoding when building
+> - **Mac app output** — build a double-clickable `.app` instead of an IPA
+> - **Older iPhones and iPads** — turn on BC texture decoding when building
 
 
 A macOS app takes your own game dumps and does the whole thing with a few clicks — unpack, rewrite
@@ -37,63 +37,63 @@ steps to get it onto the device.
 
 ---
 
-## 📖 What this is
+## What this is
 
 This is a community fork of **[nxnative](https://github.com/seedds/nxnative)** — the NSO rewriter,
 the Horizon host, the NVN-on-Metal layer and the per-game profiles are upstream work, and this fork
 follows upstream automatically. What it adds:
 
-- **🖱️ A GUI app for everyone.** [nxnative for Mac](frontend/README.md) is a game library and a
+- **A GUI app for everyone.** [nxnative for Mac](frontend/README.md) is a game library and a
   build tool in one window: pick a game's folder, choose *This Mac* or *iPhone / iPad*, and the build
   runs with live progress from the script's own counts. Finished Mac games appear in the library with
   their eShop key art, start with **Play**, and keep per-game launch options (the iPhone launcher's
   settings: frame rate, console mode, upscaling, …). Device dependencies are detected and installed
   with one click; English or Chinese, following the system. **It also downloads the repository for you
   and updates itself** — no git knowledge needed.
-- **📦 A RomFS archive.** Tears of the Kingdom's 304,243 files become 127 shards — the difference
+- **A RomFS archive.** Tears of the Kingdom's 304,243 files become 127 shards — the difference
   between an iOS install that fails with `PackageExtractionFailed` and one that works (details
   below).
 - **⏸️ Interrupted builds resume.** Extraction, DLC, module rewrite and shader compilation are kept
   and reused: a failed or stopped build continues where it left off, and a rebuild after a tweak
   reuses everything unchanged (upstream's pipeline; the app drives it with its own build folder).
-- **🔄 Follows upstream automatically.** A daily GitHub Actions job re-applies the fork's features
+- **Follows upstream automatically.** A daily GitHub Actions job re-applies the fork's features
   onto upstream's tree, verifies the result (script parse, archive reader test, a macOS host build)
   and pushes — or opens an issue with the log when a patch no longer fits.
-- **🎯 79 game profiles** with the required update version listed per game. Three are verified end
+- **79 game profiles** with the required update version listed per game. Three are verified end
   to end on this fork; 45 are reported playable on an iPhone upstream.
 
 ---
 
-## 📚 Contents
+## Contents
 
-- [✨ Features at a glance](#features-at-a-glance)
-- [🚀 Quick start](#quick-start)
-- [🎮 Supported games](#supported-games)
-- [🔧 How it works](#how-it-works)
-- [📝 Update history](#update-history)
-- [🤝 Contributing shaders and game support](#contributing-shaders-and-game-support)
-- [⚠️ Limitations](#limitations)
-- [🙏 Credits](#credits)
-- [⚖️ Legal](#legal)
-
----
-
-## ✨ Features at a glance
-
-| | Feature | Notes |
-|---|---|---|
-| 🖱️ | **One-click build** | Pick your files, press build. No command line, ever |
-| 📦 | **RomFS archiving** | 300,000 files → ~100 shards, so a 16 GB game installs |
-| 🔁 | **Resumable builds** | A stopped build continues; unchanged work is reused |
-| 🧩 | **79 game profiles** | Each with the exact update version it needs |
-| 📲 | **Install guide** | The three steps to the phone, with Reveal-in-Finder |
-| 🌏 | **Bilingual** | English / 简体中文, picked from the device language |
-| ⬇️ | **Self-installing** | Downloads the repository and updates itself |
-| 🔄 | **Auto upstream sync** | Daily, verified, with a fallback issue if a patch breaks |
+- [Features at a glance](#features-at-a-glance)
+- [Quick start](#quick-start)
+- [Supported games](#supported-games)
+- [How it works](#how-it-works)
+- [Update history](#update-history)
+- [Contributing shaders and game support](#contributing-shaders-and-game-support)
+- [Limitations](#limitations)
+- [Credits](#credits)
+- [Legal](#legal)
 
 ---
 
-## 🚀 Quick start
+## Features at a glance
+
+| Feature | Notes |
+|---|---|
+| **One-click build** | Pick your files, press build. No command line, ever |
+| **RomFS archiving** | 300,000 files → ~100 shards, so a 16 GB game installs |
+| **Resumable builds** | A stopped build continues; unchanged work is reused |
+| **79 game profiles** | Each with the exact update version it needs |
+| **Install guide** | The three steps to the phone, with Reveal-in-Finder |
+| **Bilingual** | English / 简体中文, picked from the device language |
+| **Self-installing** | Downloads the repository and updates itself |
+| **Auto upstream sync** | Daily, verified, with a fallback issue if a patch breaks |
+
+---
+
+## Quick start
 
 1. **Download the app** — [latest release](https://github.com/LNPANDY/NX2Apple/releases/latest)
    (`NS-Port-Builder-macOS-arm64.zip`). Unzip, right-click → Open the first time.
@@ -108,7 +108,7 @@ follows upstream automatically. What it adds:
 
 ---
 
-## 🎮 Supported games
+## Supported games
 
 **3 verified end to end on this fork** (build → install → play on a real iPhone), **29 reported
 playable upstream**, **58 profiles** in total. The full table with the exact update version each
@@ -122,9 +122,9 @@ game needs is [below](#games).
 
 ---
 
-## 🔧 How it works
+## How it works
 
-### 🖥️ The GUI front end
+### The GUI front end
 
 `frontend/` is a macOS app that does steps 2–5 below with a window instead of a terminal, for
 people who would rather not read a build log: four inputs picked separately (base game, update,
@@ -202,7 +202,7 @@ Chinese (including which games are verified), are on the
 [releases page](https://github.com/LNPANDY/NX2Apple/releases) and in
 [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md).
 
-## 📝 Update history
+## Update history
 
 Newest first. The fork follows upstream daily, so its game list and host fixes arrive automatically.
 
@@ -222,7 +222,7 @@ Newest first. The fork follows upstream daily, so its game list and host fixes a
 | 2026-10-20 | v0.2.0 | Bilingual (English / 中文) |
 | 2026-10-20 | v0.1.0 | First release: GUI front end, RomFS archiving |
 
-## 🤝 Contributing shaders and game support
+## Contributing shaders and game support
 
 Each new game needs its own bring-up: a profile (build IDs, memory layout, texture slots), a shader
 reader if it packs them in a form we do not read, and patch points. **Two ways to help, both
@@ -237,7 +237,7 @@ useful:**
 Issues with a full `Documents/log.txt` get looked at first — that log usually names the exact
 missing piece.
 
-## 🔄 Staying current with upstream
+## Staying current with upstream
 
 A scheduled GitHub Actions workflow (`.github/workflows/sync-upstream.yml`, daily 21:30 UTC, also
 runnable by hand) follows [seedds/nxnative](https://github.com/seedds/nxnative): it re-applies this
@@ -247,7 +247,7 @@ pushes — or opens an issue with the log when a patch no longer fits, pushing n
 fresh repository rather than a true fork, so GitHub's own "Sync fork" does not apply here; the last
 synced upstream commit lives in `.upstream-ref`.
 
-## 🛠️ Using it
+## Using it
 
 ### 1. Build the app (as upstream)
 
@@ -359,7 +359,7 @@ The index may sit at any of these places; the reader tries them in order:
 <DM_ROMFS>/romfs/romfs.idx
 ```
 
-## 📲 Playing
+## Playing
 
 **Touch controls.** Two layouts (tap the button at the top centre to switch): 2D (left stick,
 A/B/X/Y, shoulders, − / +) and 3D (adds a D-pad, a right stick and L3 / R3). With no controller
@@ -382,7 +382,7 @@ DM_OPMODE=0            # handheld mode: 720p render instead of the docked 1080p
 goes wrong, send `log.txt` (the previous run is `log.prev.txt`). Short stutters the first time a new
 scene appears are normal: the app compiles graphics for it once and remembers them.
 
-## 🎯 Using it for another game
+## Using it for another game
 
 The archive format has nothing game-specific in it: the packer walks whatever directory you give it
 and the reader looks paths up in that tree. To switch games:
@@ -408,7 +408,7 @@ Three things to watch for:
 Games from upstream's tested list (4–6 GB) need roughly 20–30 shards at 200 MiB, well inside the
 limit, and their memory footprint is far below the per-app budget that stops Tears of the Kingdom.
 
-## 🧩 What changed against upstream
+## What changed against upstream
 
 Five files added, four modified. The fs layer keeps its normal path handling: when an archive is
 open, `host_path_ex` hands out a synthetic path (`@romfsarc:<guest path>`) for entries on the
@@ -434,7 +434,7 @@ past the end would return the next file's bytes).
 The mount is recognised by its **directory**, not its name: titles differ (`rom` for most games,
 `content` for Tears of the Kingdom).
 
-## 🗂️ Games
+## Games
 
 79 game profiles ship with this repository. A profile is what makes a build possible —
 the game's build IDs, memory layout, shader tables and per-game switches — and this fork adds the
@@ -526,7 +526,7 @@ update layers over it). "无（v0）" = the base game alone is enough.
 | Brain Memory Training Academy | `0100F5D01DA3A000` | 无（v0） | Profile present; not verified on a phone |
 | Super Mario Galaxy 2 | `0100FD8022DAA000` | 1.4.0 (v393216) | Profile present; not verified on a phone |
 
-## ✅ Verified on
+## Verified on
 
 - **Tears of the Kingdom** (0100F2C0115B6000, v1.0.0 + update 1.4.3): 304,243 files packed into 127
   files; all 304,243 byte-compared against the source (`verify: OK`); the game runs from the archive
@@ -552,7 +552,7 @@ to tell from `Documents/log.txt` (resident + headroom: ~3,375 MB = not in effect
 
 <a id="limitations"></a>
 
-## ⚠️ Limitations
+## Limitations
 
 **What to expect before you start:**
 
@@ -573,7 +573,7 @@ to tell from `Documents/log.txt` (resident + headroom: ~3,375 MB = not in effect
 - **No dedup or compression.** Shards are the source bytes verbatim, so `verify` is a plain
   comparison and a repack is deterministic.
 
-## 🙏 Credits
+## Credits
 
 **Community contributors** — this project's code is not one maintainer's output:
 
@@ -600,7 +600,7 @@ All of the emulation work is other people's. This repository adds the archive su
 
 `dm/third_party` ships other projects with their licenses ([list](dm/third_party/README.md)).
 
-## ⚖️ Legal
+## Legal
 
 **What this project is.** A build tool for games you already own. It reads dumps you made of your
 own cartridges and purchases, on your own machine, and produces a package for your own device.
