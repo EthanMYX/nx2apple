@@ -92,25 +92,27 @@ struct LauncherSegmented: View {
 }
 
 /// A longer list of choices: a pill with the current one that opens the list. With `fill` it takes the width it is
-/// given, the chevron at its right end.
+/// given, the chevron at its right end; `buttonLike` draws it as LauncherSecondaryButtonStyle draws a button (Settings).
 struct LauncherMenuPicker: View {
     let options: [(value: String, label: String)]
     let selection: String
     var fill = false
+    var buttonLike = false
     let choose: (String) -> Void
     @State private var open = false
     var body: some View {
         Button { open.toggle() } label: {
             HStack(spacing: 8) {
-                Text(options.first { $0.value == selection }?.label ?? selection).font(.manrope(12.5, .semibold)).lineLimit(1)
+                Text(options.first { $0.value == selection }?.label ?? selection).font(.manrope(buttonLike ? 13 : 12.5, .semibold)).lineLimit(1)
                 if fill { Spacer(minLength: 0) }
                 Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 14).padding(.vertical, 7)
+            .padding(.horizontal, buttonLike ? 15 : 14).padding(.vertical, buttonLike ? 9 : 7)
             .frame(maxWidth: fill ? .infinity : nil)
-            .background(Color.white.opacity(0.06), in: Capsule())
-            .overlay(Capsule().strokeBorder(Color.white.opacity(0.10)))
-            .contentShape(Capsule())
+            .background(Color.white.opacity(buttonLike ? 0.055 : 0.06), in: RoundedRectangle(cornerRadius: buttonLike ? 9 : 99))
+            .overlay(RoundedRectangle(cornerRadius: buttonLike ? 9 : 99).strokeBorder(Color.white.opacity(0.10)))
+            .foregroundStyle(Color.white.opacity(0.92))
+            .contentShape(RoundedRectangle(cornerRadius: buttonLike ? 9 : 99))
         }
         .buttonStyle(.plain)
         .popover(isPresented: $open, arrowEdge: .bottom) {
