@@ -127,6 +127,7 @@ struct ContentView: View {
             if let id = optionsFor { LaunchOptionsView(m: m, library: library, gameID: id).environmentObject(padFocus) }
         }
         .sheet(isPresented: $controlsOpen) { ControlsView(m: m, layout: controls).environmentObject(padFocus) }
+        .sheet(isPresented: $m.showUpdateSheet) { UpdateSheet(m: m) }
         .onChange(of: optionsFor) { id in padFocus.scope = id != nil ? "launch" : (controlsOpen ? "controls" : "main") }
         .onChange(of: controlsOpen) { open in padFocus.scope = open ? "controls" : (optionsFor != nil ? "launch" : "main") }
         .onChange(of: page) { _ in padFocus.focused = nil }

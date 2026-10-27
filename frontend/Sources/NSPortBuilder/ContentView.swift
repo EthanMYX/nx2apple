@@ -474,9 +474,15 @@ final class BuildModel: ObservableObject {
     // ---- App self-update (GitHub Releases) ----
 
     /// Bump together with each release tag; the update check compares it with the latest release.
-    static let appVersion = "0.4.7"
-    @Published var appUpdate: (tag: String, url: String)?
+    static let appVersion = "0.4.8"
+    /// The update found by checkAppUpdate: its tag, the asset to download, and the release notes the
+    /// sheet shows. The notes are why the sheet exists — "update available" alone told a user nothing
+    /// about what they would get (the 0.4.x releases each changed a lot).
+    @Published var appUpdate: (tag: String, url: String, notes: String)?
     @Published var appBusy = false
+    /// Whether the "a new version is out" sheet is up: opened by the launch check and by Check for
+    /// updates, so a user learns what changed before deciding, not after downloading.
+    @Published var showUpdateSheet = false
     @Published var appStatus = ""
 
     nonisolated static func isNewer(_ tag: String, than current: String) -> Bool {
@@ -496,15 +502,16 @@ final class BuildModel: ObservableObject {
         appBusy = true
         if !silent { appStatus = t("app.checking") }
         URLSession.shared.dataTask(with: URL(string: "https://api.github.com/repos/LNPANDY/NX2Apple/releases/latest")!) { data, _, _ in
-            var found: (String, String)?
+            var found: (String, String, String)?
             if let d = data, let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
                 let tag = obj["tag_name"] as? String ?? ""
                 if Self.isNewer(tag, than: Self.appVersion),
                    let assets = obj["assets"] as? [[String: Any]] {
                     // nxnative-macOS-arm64.zip; releases from before the rename name it NS-Port-Builder-macOS-arm64.zip
+                    let notes = (obj["body"] as? String) ?? ""
                     for name in ["NX2Apple-macOS-arm64.zip", "nxnative-macOS-arm64.zip", "NS-Port-Builder-macOS-arm64.zip"] where found == nil {
                         for a in assets where (a["name"] as? String) == name {
-                            if let u = a["browser_download_url"] as? String { found = (tag, u) }
+                            if let u = a["browser_download_url"] as? String { found = (tag, u, notes) }
                         }
                     }
                 }
@@ -512,8 +519,9 @@ final class BuildModel: ObservableObject {
             DispatchQueue.main.async {
                 self.appBusy = false
                 if let f = found {
-                    self.appUpdate = f
+                    self.appUpdate = (tag: f.0, url: f.1, notes: f.2)
                     self.appStatus = String(format: self.t("app.found"), f.0)
+                    self.showUpdateSheet = true      // the sheet names what the new version does
                 } else if !silent {
                     self.appStatus = data == nil ? self.t("app.netFail") : self.t("app.upToDate")
                 }
