@@ -737,13 +737,22 @@ def rmtree(p):
     # but by then the extraction and the capture have run for minutes, and the check raises before
     # layer_shaders creates gl_shaders.log, so the failure had no log to read (issue #71). Checked
     # next to check_metal, which is in the same place for the same reason.
-    P.append(('GL shader tool check', 'glslangValidator is not installed', [(
+    P.append(('GL shader tool check', 'check_glslang(env)', [(
         "    if gfx == 'nvn': check_metal(py, repo, env)   # before the captures and the shader split, which take minutes\n",
-        """    if gfx == 'nvn': check_metal(py, repo, env)   # before the captures and the shader split, which take minutes
-    # Same reason as check_metal: build_gl_shaders checks for glslangValidator, but by then the
-    # extraction and the capture have run for minutes, and the check raises before layer_shaders
-    # creates gl_shaders.log — so the GUI showed a failure with no log to read (issue #71).
-    if gfx == 'gl' and not shutil.which('glslangValidator', path=env['PATH']):
+        "    if gfx == 'nvn': check_metal(py, repo, env)   # before the captures and the shader split, which take minutes\n"
+        "    if gfx == 'gl': check_glslang(env)\n"), (
+        # the function itself, beside check_metal
+        """    raise BuildError(msg.replace('set DM_ALLOW_OTHER_METAL=1 (the NSP script\\'s --allow-other-metal)', 'ALLOW_OTHER_METAL = True (--allow-other-metal)'))
+""",
+        """    raise BuildError(msg.replace('set DM_ALLOW_OTHER_METAL=1 (the NSP script\\'s --allow-other-metal)', 'ALLOW_OTHER_METAL = True (--allow-other-metal)'))
+
+
+def check_glslang(env):
+    \"\"\"An OpenGL game's GLSL goes through glslangValidator; build_gl_shaders checks for it, but only
+    after the extraction and the runtime capture have run for minutes, and it raises before
+    layer_shaders creates gl_shaders.log — so the GUI showed a failure with no log to read (issue
+    #71). Checked before those steps, as check_metal is and for the same reason.\"\"\"
+    if not shutil.which('glslangValidator', path=env['PATH']):
         raise BuildError("glslangValidator is not installed: an OpenGL game's GLSL shaders need it to compile to SPIR-V (brew install glslang)")
 """)]))
     for name, marker, pairs in P:
