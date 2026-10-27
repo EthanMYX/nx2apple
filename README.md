@@ -432,7 +432,7 @@ The mount is recognised by its **directory**, not its name: titles differ (`rom`
 
 ## 🗂️ Games
 
-75 game profiles ship with this repository. A profile is what makes a build possible —
+79 game profiles ship with this repository. A profile is what makes a build possible —
 the game's build IDs, memory layout, shader tables and per-game switches — and this fork adds the
 RomFS archive layer on top, so a large game can be installed at all.
 
