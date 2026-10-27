@@ -94,16 +94,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ditto -c -k --keepParent nxnative.app nxnative-macOS-arm64.zip
-          # The same app under the old names, for copies from before the rename: their self-update looks for this
-          # asset and for "NS Port Builder.app" in it, and swaps the new app in at their own path
-          mkdir -p legacy && ditto nxnative.app "legacy/NS Port Builder.app"
-          (cd legacy && ditto -c -k --keepParent "NS Port Builder.app" ../NS-Port-Builder-macOS-arm64.zip)
+          APP="NX2Apple.app"
+          ditto -c -k --keepParent "$APP" NX2Apple-macOS-arm64.zip
+          # The same build under the two older names, for copies from before each rename: an old
+          # app's updater looks for its own asset name and, inside it, its own bundle name, then
+          # swaps the new app in at its own path. The bundle keeps working under any name (the
+          # executable and Info.plist do not name it), so a copy of the tree is enough.
+          for legacy in nxnative "NS Port Builder"; do
+            rm -rf "legacy-$legacy"
+            mkdir -p "legacy-$legacy"
+            ditto "$APP" "legacy-$legacy/$legacy.app"
+            (cd "legacy-$legacy" && ditto -c -k --keepParent "$legacy.app" "../${legacy}-macOS-arm64.zip")
+          done
+          ls -la *.zip
 
       - uses: actions/upload-artifact@v4
         with:
-          name: nxnative-macOS-arm64
-          path: frontend/nxnative-macOS-arm64.zip
+          name: NX2Apple-macOS-arm64
+          path: frontend/NX2Apple-macOS-arm64.zip
           if-no-files-found: error
 
       - name: Attach to the release
@@ -113,5 +121,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
-            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "nxnative $GITHUB_REF_NAME"
-          gh release upload "$GITHUB_REF_NAME" frontend/nxnative-macOS-arm64.zip frontend/NS-Port-Builder-macOS-arm64.zip --clobber
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "NX2Apple $GITHUB_REF_NAME"
+          # All three names, one build: NX2Apple is current; the older two keep self-update working
+          # for installs from before each rename (an app replaces the bundle at its own path).
+          gh release upload "$GITHUB_REF_NAME" \
+            frontend/NX2Apple-macOS-arm64.zip \
+            frontend/nxnative-macOS-arm64.zip \
+            frontend/NS-Port-Builder-macOS-arm64.zip --clobber
