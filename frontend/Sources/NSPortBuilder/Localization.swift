@@ -379,6 +379,11 @@ enum L10n {
         "dep.installTimeout": ("安装超时（30 分钟）——网络太慢或卡住了",
                                   "Install timed out (30 minutes) — the network is slow or stuck"),
         "dep.installAll": ("一键安装全部缺失项", "Install all missing"),
+        // ---- Copy diagnostics (Diagnostics.swift); the report itself is in English, for the issue ----
+        "diag.title": ("诊断信息", "Diagnostics"),
+        "diag.note": ("用于问题报告：版本、工具和上次构建的日志，不含密钥。", "For a bug report: versions, tools, the last build’s log. No keys."),
+        "diag.copy": ("复制诊断信息", "Copy diagnostics"),
+        "diag.copied": ("已复制", "Copied"),
         "dep.recheck": ("重新检测", "Check again"),
         "dep.install": ("安装", "Install"),
         "dep.installing": ("安装中…", "Installing…"),

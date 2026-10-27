@@ -812,6 +812,24 @@ final class LibraryTests: XCTestCase {
         model.stages = [Stage(id: 1, name: "Extract game files", state: .running, percent: 40)]
         try capture("building", activeID: library.games[1].id)
         model.running = false
+
+        // ---- Copy diagnostics (#69): Settings with its row, and the button's Copied confirmation (nothing is copied) ----
+        do {
+            try capture("settings-diagnostics", height: 1500, page: .settings)
+            let buttons = NSHostingView(rootView: HStack(spacing: 14) {
+                DiagnosticsButton(m: model, width: BuilderView.settingsButtonWidth)
+                DiagnosticsButton(m: model, width: BuilderView.settingsButtonWidth, showCopied: true)
+            }.padding(24).background(LauncherPalette.background).environmentObject(PadFocus()))
+            buttons.frame = NSRect(x: 0, y: 0, width: 420, height: 90)
+            let window = NSWindow(contentRect: buttons.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.contentView = buttons
+            window.orderFront(nil)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+            let rep = try XCTUnwrap(buttons.bitmapImageRepForCachingDisplay(in: buttons.bounds))
+            buttons.cacheDisplay(in: buttons.bounds, to: rep)
+            try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent("diagnostics-copied.png"))
+            window.orderOut(nil)
+        }
     }
 
     /// Issue #52: the failure note names the last real line, not just the exit code.

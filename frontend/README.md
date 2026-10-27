@@ -37,6 +37,14 @@ time left; the build log opens under it. **Stop** ends the script and every tool
 it started (the build runs in a process group of its own), and so does quitting
 the app.
 
+**Settings → Copy diagnostics** puts a short Markdown report on the clipboard, for a
+bug report: the app and macOS versions and the chip; the repository, its commit and
+branch and how far it is behind `upstream/main` and `origin/main` as of the last fetch
+(nothing is fetched); the Python and .NET the builds run with and the dependency
+check; this session's last build command and the last 50 lines of its log. The home
+folder is shown as `~`, a log line holding key material (`name = <hex>`, as in
+`prod.keys`) keeps only its name, and no environment variables are included.
+
 A completed Mac build appears in the collection automatically and can be started
 with **Play**. An iPhone build, by default, offers its unsigned IPA and the
 sideloading and RomFS-copy instructions.
