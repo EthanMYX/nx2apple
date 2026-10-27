@@ -59,7 +59,7 @@ follows upstream automatically. What it adds:
 - **🔄 Follows upstream automatically.** A daily GitHub Actions job re-applies the fork's features
   onto upstream's tree, verifies the result (script parse, archive reader test, a macOS host build)
   and pushes — or opens an issue with the log when a patch no longer fits.
-- **🎯 75 game profiles** with the required update version listed per game. Three are verified end
+- **🎯 79 game profiles** with the required update version listed per game. Three are verified end
   to end on this fork; 45 are reported playable on an iPhone upstream.
 
 ---
@@ -85,7 +85,7 @@ follows upstream automatically. What it adds:
 | 🖱️ | **One-click build** | Pick your files, press build. No command line, ever |
 | 📦 | **RomFS archiving** | 300,000 files → ~100 shards, so a 16 GB game installs |
 | 🔁 | **Resumable builds** | A stopped build continues; unchanged work is reused |
-| 🧩 | **75 game profiles** | Each with the exact update version it needs |
+| 🧩 | **79 game profiles** | Each with the exact update version it needs |
 | 📲 | **Install guide** | The three steps to the phone, with Reveal-in-Finder |
 | 🌏 | **Bilingual** | English / 简体中文, picked from the device language |
 | ⬇️ | **Self-installing** | Downloads the repository and updates itself |
@@ -208,7 +208,7 @@ Newest first. The fork follows upstream daily, so its game list and host fixes a
 
 | Date | Version | What changed |
 |---|---|---|
-| 2026-10-27 | v0.4.7 | **75 game profiles** (+3: Octopath Traveler, Donkey Kong Country Returns HD, Donkey Kong Country: Tropical Freeze) from the daily sync; **one host binary, any game's memory layout** (runtime profiles — the foundation for the universal launcher, which has not been built yet); **the language toggle translates the whole interface**; **Xcode betas count** (the check asks xcode-select); a loud notice when an upstream update invalidates cached shaders; the output folder documented as the build cache's home; Windows front end: in-app Python 3.12, SDK clone past Windows' path-length limit, LLVM verified by compiling rather than --version, no more black console windows; rebuilding on an external exFAT work folder no longer crashes |
+| 2026-10-27 | v0.4.7 | **79 game profiles** (+7: Octopath Traveler, Donkey Kong Country Returns HD, Donkey Kong Country: Tropical Freeze, Mario + Rabbids Sparks of Hope, Kirby and the Forgotten Land, Yoshi's Crafted World, Xenoblade Chronicles 3) from the daily sync; **one host binary, any game's memory layout** (runtime profiles — the foundation for the universal launcher, which has not been built yet); **the language toggle translates the whole interface**; **Xcode betas count** (the check asks xcode-select); a loud notice when an upstream update invalidates cached shaders; the output folder documented as the build cache's home; Windows front end: in-app Python 3.12, SDK clone past Windows' path-length limit, LLVM verified by compiling rather than --version, no more black console windows; rebuilding on an external exFAT work folder no longer crashes |
 | 2026-10-26 | v0.4.6 | **Windows app fixed against real hardware reports**: the missing .NET SDK row (it never appeared, so nothing could install it), no more black console windows stealing the foreground, download mirrors chosen by a speed probe (a 974 s LLVM download on a mainland connection), tools installed outside the app folder so updates stop deleting them, and repository checks that say what git is doing |
 | 2026-10-26 | v0.4.5 | **Mac app output** (a double-clickable .app from the same build); **A15/A16 and earlier devices** via CPU BC decode, as an app switch; per-game data folders (`Documents/games/<id>/`) so an external drive works; NRO header no longer scanned as code; the nightly sync can no longer fail silently |
 | 2026-10-26 | v0.4.4 | **Fixes a build failure that hit every app build in v0.4.3** (`work` read before it was assigned); 72 games (+3) |
@@ -436,7 +436,7 @@ The mount is recognised by its **directory**, not its name: titles differ (`rom`
 
 ## 🗂️ Games
 
-75 game profiles ship with this repository. A profile is what makes a build possible —
+79 game profiles ship with this repository. A profile is what makes a build possible —
 the game's build IDs, memory layout, shader tables and per-game switches — and this fork adds the
 RomFS archive layer on top, so a large game can be installed at all.
 
@@ -460,12 +460,14 @@ update layers over it). "无（v0）" = the base game alone is enough.
 | Hyrule Warriors: Age of Calamity | `01002B00111A2000` | 1.3.0 (v327680) | Playable on an iPhone (upstream) |
 | Celeste | `01002B30028F6000` | 1.4.1.1 (v589824) | Profile present; not verified on a phone |
 | Advance Wars 1+2: Re-Boot Camp | `0100300012F2A000` | 无（v0） | Playable on an iPhone (upstream) |
+| Mario + Rabbids® Sparks of Hope | `0100317013770000` | 1.6.2225577 (v393216) | Profile present; not verified on a phone |
 | Taiko Risshiden V DX | `0100346017304000` | 1.1.1 (v131072) | Playable on an iPhone by touch (upstream) |
 | The Great Ace Attorney Chronicles | `010036E00FB20000` | 无（v0） | Playable on an iPhone (upstream) |
 | FINAL FANTASY TACTICS - The Ivalice Chronicles | `010038B015560000` | 1.4.0 (v393216) | Profile present; not verified on a phone |
 | 13 Sentinels: Aegis Rim | `01003FC01670C000` | 1.10 (v65536) | Playable on an iPhone (upstream) |
 | Bayonetta 3 | `01004A4010FEA000` | 1.2.0 (v131072) | Playable on an iPhone (upstream) |
 | DARK SOULS: REMASTERED | `01004AB00A260000` | 1.0.3 (v196608) | Profile present; not verified on a phone |
+| Kirby and the Forgotten Land | `01004D300C5AE000` | 1.1.0 (v65536) | Profile present; not verified on a phone |
 | Monster Train 2 | `010051701FB46000` | 1.1.1 (v131072) | Playable on an iPhone (upstream) |
 | OCTOPATH TRAVELER 0 | `01005270232F2000` | 1.0.5 (v327680) | Profile present; not verified on a phone |
 | Hades | `0100535012974000` | 1.0.38233 (v589824) | Playable on an iPhone (upstream) |
@@ -473,6 +475,7 @@ update layers over it). "无（v0）" = the base game alone is enough.
 | NieR:Automata The End of YoRHa Edition | `010056B015FE8000` | 1.0.3 (v131072) | Playable on an iPhone (upstream) |
 | OCTOPATH TRAVELER | `010057D006492000` | 1.0.5 (v327680) | Profile present; not verified on a phone |
 | Persona 5 Royal | `01005CA01580E000` | 1.0.2 (v65536) | Playable on an iPhone (upstream) |
+| Yoshi's Crafted World | `01006000040C2000` | 1.0.1 (v65536) | Profile present; not verified on a phone |
 | FINAL FANTASY RESONANCE | `0100606026F12000` | 1.0.1 (v65536) | Playable on an iPhone (upstream) |
 | Big Brain Academy: Brain vs. Brain | `0100620012D6E000` | 1.2.0 (v131072) | Profile present; not verified on a phone |
 | Unicorn Overlord | `010069401ADB8000` | 1.05 (v262144) | Profile present; not verified on a phone |
@@ -483,6 +486,7 @@ update layers over it). "无（v0）" = the base game alone is enough.
 | Animal Crossing: New Horizons | `01006F8002326000` | 3.0.3 (v2228224) | **Verified here** — builds, installs and runs smoothly on an iPhone; 103,645 files into 72 archive shards |
 | AI: THE SOMNIUM FILES - nirvanA Initiative | `0100713016CCC000` | 1.0.2 (v131072) | Playable on an iPhone (upstream) |
 | ASTRAL CHAIN | `01007300020FA000` | 1.0.1 (v65536) | Playable on an iPhone (upstream) |
+| Xenoblade Chronicles 3 | `010074F013262000` | 2.2.1 (v720896) | Profile present; not verified on a phone |
 | Bayonetta | `010076F0049A2000` | 1.1 (v65536) | Playable on an iPhone (upstream) |
 | Bayonetta 2 | `01007960049A0000` | 1.2 (v131072) | Playable on an iPhone (upstream) |
 | Portal | `01007BB017812000` | 1.0.3 (v196608) | Playable on an iPhone (upstream) |
