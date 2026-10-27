@@ -1167,6 +1167,16 @@ PATCHERS = {
     'docs/env_switches.tsv': patch_env_switches,
 }
 
+# PATCHED, MARKERS and PATCHERS are three views of one set and have to agree, or a carrier works
+# while something else refuses to let it through. v0lumehi hit exactly that (PR #59): front_mac.m,
+# patch_nso.py and Hades II's game.tsv had patchers and markers but were missing from PATCHED, so
+# pr-scope refused the PR that carried them. Checked here rather than remembered.
+assert set(PATCHED) == set(MARKERS) == set(PATCHERS), (
+    'the carrier tables disagree: PATCHED-only %s, MARKERS-only %s, PATCHERS-only %s' % (
+        sorted(set(PATCHED) - set(MARKERS) | set(PATCHED) - set(PATCHERS)),
+        sorted(set(MARKERS) - set(PATCHED) | set(MARKERS) - set(PATCHERS)),
+        sorted(set(PATCHERS) - set(PATCHED) | set(PATCHERS) - set(MARKERS))))
+
 report, problems = [], []
 class SyncProblem(Exception): pass
 def say(s): report.append(s); print(s, flush=True)
