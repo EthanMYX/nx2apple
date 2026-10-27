@@ -494,6 +494,11 @@ final class LibraryTests: XCTestCase {
         let completed = expectation(description: "Successful app is added without an import")
         let token = library.$games.filter { $0.contains(where: \.isReady) }.prefix(1).sink { _ in completed.fulfill() }
         XCTAssertTrue(model.canBuild)
+        // The rewriter's extraction output (RomFS.img, one file): the archive step copies it into
+        // games/<id>/ beside the .app, which is what arms the launcher's save relocation.
+        let extract = temporary.appendingPathComponent("0100535012974000_build/extract/v0")
+        try FileManager.default.createDirectory(at: extract, withIntermediateDirectories: true)
+        try Data("DMROMFS1-fixture".utf8).write(to: extract.appendingPathComponent("RomFS.img"))
         window.orderOut(nil) // Registration must work even while the launcher is hidden.
         model.startBuild()
         wait(for: [completed], timeout: 10)
@@ -503,9 +508,12 @@ final class LibraryTests: XCTestCase {
         wait(for: [settled], timeout: 10)
         XCTAssertTrue(model.done)
         XCTAssertFalse(model.running)
-        XCTAssertEqual(model.stages.map(\.name), ["Mac app"])   // from the JSON events, which the log shows as text
-        XCTAssertEqual(model.stages.first?.state, .done)
+        XCTAssertEqual(model.stages.map(\.name), ["Mac app", "打包游戏数据为 romfs.img（单文件）"])   // the app, then the archive copy
+        XCTAssertEqual(model.stages.map(\.state), [.done, .done])
         XCTAssertEqual(model.stages.first?.detail, "Test build.app")
+        let games = temporary.appendingPathComponent("games").appendingPathComponent(titleID)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: games.appendingPathComponent("romfs.img").path),
+                      "the archive must land beside the .app: it arms the launcher's save relocation")
         XCTAssertTrue(model.logTail.contains("✓ Mac app (4s): Test build.app"))
         XCTAssertFalse(model.logTail.contains("\"ev\""))
         XCTAssertEqual(library.games.count, 1)

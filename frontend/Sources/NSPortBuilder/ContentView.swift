@@ -1058,15 +1058,22 @@ final class BuildModel: ObservableObject {
                 if status.terminationStatus == 0 {
                     self.markAllDone()
                     if self.target == "mac-app" {
-                        // A Mac app carries its RomFS inside, so the archive step would be wasted
-                        // work; the .app's existence is the real check (the script can exit 0
-                        // without writing it, e.g. when pack_app.py is missing from the checkout).
+                        // The .app keeps its RomFS inside (self-contained, double-clickable), and
+                        // the archive step also writes games/<id>/romfs.img beside it. That folder
+                        // arms the launcher's save relocation (saves beside the game) and is the
+                        // copy for a phone or an external drive; skipping it left every Mac build
+                        // without games/, so the launcher never treated the folder as a library
+                        // and saves stayed in ~/Library (the rebuild test).
                         let made = !self.macAppPath.isEmpty &&
                                    FileManager.default.fileExists(atPath: self.macAppPath)
-                        self.done = made
-                        self.doneNote = self.t(made ? "msg.macAppDone" : "msg.macAppMissing")
-                        self.running = false
-                        self.cleanupStaging()
+                        guard made else {
+                            self.done = false
+                            self.doneNote = self.t("msg.macAppMissing")
+                            self.running = false
+                            self.cleanupStaging()
+                            return
+                        }
+                        self.packArchive(workDir: self.effectiveWorkDir)   // finishes the build when done
                     } else if self.installsDirectly {
                         // The same archive as for sideloading, then the app without the game files, then the archive into its Documents
                         self.packArchive(workDir: self.effectiveWorkDir) { self.signAndInstall(archive: $0) }
@@ -1362,11 +1369,10 @@ final class BuildModel: ObservableObject {
         // The extraction writes either a RomFS folder (older tools) or RomFS.img, one image file
         // (the rewriter packs it now: build_ipa_from_nsp.py:876 tests for exactly that). Looking
         // only for the folder made every 0.4.8 build end with "archive skipped" on a machine where
-        // the extraction had in fact succeeded (issue #73).
-        let vers = ((try? fm.contentsOfDirectory(atPath: extract)) ?? [])
-            .filter { $0.hasPrefix("v") && fm.fileExists(atPath: extract + "/" + $0 + "/RomFS") }
-            .sorted { (Int($0.dropFirst()) ?? 0) < (Int($1.dropFirst()) ?? 0) }
-        guard let v = vers.last else {
+        // the extraction had in fact succeeded (issue #73). extractedVersion is the one authority:
+        // an inline copy of its predicate here drifted back to folder-only during a merge, and the
+        // archive skipped again while the test — which drives the function — stayed green.
+        guard let v = Self.extractedVersion(in: extract) else {
             stages.append(Stage(id: 1000, name: t("prog.archiveShort"), state: .failed, detail: t("prog.noRomfs")))
             doneNote = String(format: t("msg.archiveSkipped"), extract)
             running = false; cleanupStaging(); return
@@ -1440,14 +1446,21 @@ final class BuildModel: ObservableObject {
             try? fm.removeItem(atPath: to)
             do {
                 try fm.copyItem(atPath: romfsImage, toPath: to)
-                stages.append(Stage(id: idx, name: t("prog.archive"), state: .done, detail: v))
+                // The running stage is updated in place: there is no process here whose progress
+                // events would move it, and appending a second stage of the same name read as a
+                // duplicate in the stage list.
+                if let i = stages.firstIndex(where: { $0.id == idx }) {
+                    stages[i].state = .done; stages[i].detail = v
+                }
                 say(String(format: t("msg.archiveLog"), romfsImage, dest))
                 archivePath = dest
                 if let then { return then(dest) }
                 cleanupStaging()
                 finishBuild(ok: true, note: t("msg.done"))
             } catch {
-                stages.append(Stage(id: idx, name: t("prog.archive"), state: .failed, detail: error.localizedDescription))
+                if let i = stages.firstIndex(where: { $0.id == idx }) {
+                    stages[i].state = .failed; stages[i].detail = error.localizedDescription
+                }
                 doneNote = String(format: t("msg.archiveFailed"), 1)
                 running = false; cleanupStaging()
             }
