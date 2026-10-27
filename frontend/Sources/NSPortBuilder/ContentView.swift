@@ -1286,8 +1286,13 @@ final class BuildModel: ObservableObject {
         running = true
         let fm = FileManager.default
         let extract = workDir + "/extract"
+        // The extraction writes either a RomFS folder (older tools) or RomFS.img, one image file
+        // (the rewriter packs it now: build_ipa_from_nsp.py:876 tests for exactly that). Looking
+        // only for the folder made every 0.4.8 build end with "archive skipped" on a machine where
+        // the extraction had in fact succeeded (issue #73).
         let vers = ((try? fm.contentsOfDirectory(atPath: extract)) ?? [])
-            .filter { $0.hasPrefix("v") && fm.fileExists(atPath: extract + "/" + $0 + "/RomFS") }
+            .filter { $0.hasPrefix("v") && (fm.fileExists(atPath: extract + "/" + $0 + "/RomFS") ||
+                                            fm.fileExists(atPath: extract + "/" + $0 + "/RomFS.img")) }
             .sorted { (Int($0.dropFirst()) ?? 0) < (Int($1.dropFirst()) ?? 0) }
         guard let v = vers.last else {
             stages.append(Stage(id: 1000, name: t("prog.archiveShort"), state: .failed, detail: t("prog.noRomfs")))
@@ -1295,6 +1300,7 @@ final class BuildModel: ObservableObject {
             running = false; cleanupStaging(); return
         }
         let romfs = extract + "/" + v + "/RomFS"
+        let romfsImage = extract + "/" + v + "/RomFS.img"
         // The output is Documents/games/<title ID>/romfs — the per-game layout the iOS app looks for
         // first. Copying the whole `games` folder onto the phone (or into a folder the Files app
         // exposes on an external drive) then needs no renaming, and several games' folders can sit
@@ -1337,6 +1343,44 @@ final class BuildModel: ObservableObject {
         stages.append(Stage(id: idx, name: t("prog.archive"), state: .running, detail: v))
         say(String(format: t("msg.archiveLog"), romfs, dest))
 
+        // The extraction may already have packed the image (RomFS.img beside the code modules): then
+        // this is a copy, not a pack. Packing it again from a folder that no longer exists was the
+        // other half of issue #73.
+        if fm.fileExists(atPath: romfsImage) {
+            let to = dest + "/romfs.img"
+            // Reuse by the image's own identity: copying a multi-GB file on every build of an
+            // unchanged game is the cost this avoids. Size and modification date are enough — the
+            // extraction rewrites the file whenever the game's data changes.
+            if let src = try? fm.attributesOfItem(atPath: romfsImage),
+               let have = try? fm.attributesOfItem(atPath: to),
+               let a = src[.size] as? Int64, let b = have[.size] as? Int64, a == b,
+               let da = src[.modificationDate] as? Date, let db = have[.modificationDate] as? Date,
+               abs(da.timeIntervalSince(db)) < 1 {
+                stages.append(Stage(id: idx, name: t("prog.archive"), state: .done,
+                                    detail: String(format: t("prog.archiveReused"), 1)))
+                say(String(format: t("msg.archiveReused"), dest))
+                archivePath = dest
+                if let then { return then(dest) }
+                cleanupStaging()
+                finishBuild(ok: true, note: t("msg.done"))
+                return
+            }
+            try? fm.removeItem(atPath: to)
+            do {
+                try fm.copyItem(atPath: romfsImage, toPath: to)
+                stages.append(Stage(id: idx, name: t("prog.archive"), state: .done, detail: v))
+                say(String(format: t("msg.archiveLog"), romfsImage, dest))
+                archivePath = dest
+                if let then { return then(dest) }
+                cleanupStaging()
+                finishBuild(ok: true, note: t("msg.done"))
+            } catch {
+                stages.append(Stage(id: idx, name: t("prog.archive"), state: .failed, detail: error.localizedDescription))
+                doneNote = String(format: t("msg.archiveFailed"), 1)
+                running = false; cleanupStaging()
+            }
+            return
+        }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: pythonPath.isEmpty ? "/usr/bin/python3" : pythonPath)
         // dest/romfs.img: one file, which main.m's per-game lookup takes before any folder.
