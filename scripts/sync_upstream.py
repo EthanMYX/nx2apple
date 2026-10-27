@@ -11,10 +11,12 @@ What it does:
      adds any vendored file upstream has that the fork's tree lacks
   2. applies adds and modifications file by file, and deletions — except the fork's own
      files (the RomFS archive layer), which upstream must not delete
-  3. re-applies the fork's patches to the four files that carry them
-     (hle_fs.c, the host Makefile, build_ipa.sh, the NSP script); every patch is
-     anchor-based and idempotent, and one that no longer fits fails the run loudly
-     rather than producing a silently broken tree
+  3. re-applies the fork's patches to the files that carry them (PATCHED; one patcher each, in
+     PATCHERS, with a marker only the fork's code contains); every patch is anchor-based and
+     idempotent, and one that no longer fits fails the run loudly rather than producing a silently
+     broken tree. Before any of that, check_unprotected() stops the run when a vendored file the
+     fork edited by hand (it differs from the last sync base) is in none of OURS, PATCHED and
+     DROPPED and upstream changes it now: the edit would be lost.
   4. verifies: every .py parses on the Python this fork supports as its floor (3.9),
      the iOS build script survives bash -n, the archive reader test passes, and the
      macOS host builds for a real profile (skippable with --skip-build)
@@ -22,7 +24,12 @@ What it does:
 On success the caller commits and pushes; on failure nothing is written outside the
 working tree, so CI can open an issue with the log instead.
 
+Every patcher is also run against the files of a real upstream ref by scripts/tests/test_sync_patchers.py
+(CI, and locally with seedds/main fetched), so a patcher that no longer fits, or whose marker upstream's
+own text satisfies, fails there before it can stop or silently skip a sync (issue #92).
+
 Usage: sync_upstream.py --old <upstream sha> --new <upstream sha> [--skip-build]
+       sync_upstream.py --old <last sync base> --check-protection   (list unprotected fork edits)
 """
 import argparse, json, os, pwd, re, subprocess, sys, shutil, tempfile
 from pathlib import Path
@@ -36,15 +43,6 @@ OURS = {'dm/host/romfs_arc.c', 'dm/host/romfs_arc.h', 'dm/tools/romfs_arc.py',
         # BC decode for GPUs without BC support (from d2r-mobile's bcdec line; tex_bc_cpu profiles)
         'dm/third_party/bcdec/bcdec.h', 'dm/third_party/bcdec/LICENSE',
         'dm/gfx/tex/nvn_bcdec.c', 'dm/gfx/tex/nvn_bcdec.h',
-        # The adjustable clock entry (PR #26) and its test are fork-only for now: upstream does not
-        # have CreateWithAdjustableSystemClock, so a sync would otherwise replace these files and
-        # silently drop the fix (issue #29, found by v0lumehi reading the sync script). If upstream
-        # takes seedds PR for it, these leave OURS and come back with the sync instead.
-        'dm/host/hle_time.c', 'dm/host/tests/t_time.c',
-        # dm/games/game.py carries the tex_bc_cpu profile key and the 'profile' subcommand that
-        # writes the runtime profile; both are fork-only, so the file is never taken from upstream
-        # (a verify-only patcher was not enough: the sync replaced it first and then complained).
-        'dm/games/game.py',
         'dm/gfx/tex/tests/t_bcdec.c',
         # The Mac front end's key and controller button map (seedds/nxnative#386, still open):
         # the launcher's Controls page writes DM_KEYMAP / DM_PAD_MAP, and patch_front_mac() makes
@@ -56,16 +54,32 @@ OURS = {'dm/host/romfs_arc.c', 'dm/host/romfs_arc.h', 'dm/tools/romfs_arc.py',
         # first wholesale sync deleted it.
         'dm/ios/ENTITLEMENTS.md',
         # This script: fork-only, so a PR that changes it is not a vendored edit (pr-scope reads OURS)
-        'scripts/sync_upstream.py',
+        'scripts/sync_upstream.py', 'scripts/tests/test_sync_patchers.py',   # and its test (issue #92)
         # The NRO bound's tests (issue #14): fork-only, beside nso_code.py's lo bound
         'dm/tools/tests/test_nro_header.py',
         # The Files-app game-data pick (bookmark of the chosen folder): fork-only, upstream has no such path
         'dm/ios/Sources/DataBookmark.m', 'dm/ios/Sources/DataBookmark.h'}
 # Vendored files that carry fork patches: taken fresh from upstream, then patched below.
 PATCHED = ('dm/host/hle_fs.c', 'dm/host/Makefile', 'dm/host/tests/Makefile', 'dm/ios/tools/build_ipa.sh',
-           'scripts/build_ipa_from_nsp.py', 'dm/gfx/tools/shader_split.py',
+           'scripts/build_ipa_from_nsp.py',
            'dm/ios/Sources/main.m', 'dm/gfx/nvn/nvn_mtl.m', 'dm/host/dm.h',
-           'dm/ios/tests/test_romfs_startup.py', 'dm/ios/tests/test_profile_pack.py', 'docs/env_switches.tsv', 'dm/host/front_mac.m', 'dm/tools/patch_nso.py', 'dm/games/0100A00019DE0000/game.tsv')
+           'dm/ios/tests/test_romfs_startup.py', 'dm/ios/tests/test_profile_pack.py', 'docs/env_switches.tsv', 'dm/host/front_mac.m', 'dm/tools/patch_nso.py', 'dm/games/0100A00019DE0000/game.tsv',
+           # hand edits until issue #92, now patchers (see "Fork edits that had no protection" below)
+           'dm/mac/launcher.c',
+           'dm/host/hle_svc.c',
+           'dm/host/hle_os.c',
+           'dm/host/hle_fpslock.c',
+           'dm/host/loader.c',
+           'dm/ios/Sources/DmGamepad.m',
+           'dm/ios/Sources/Launcher.swift',
+           'dm/ios/project.yml',
+           'dm/ios/tests/test_xcode_workflow.py',
+           'dm/tools/env_switches.py',
+           'dm/tools/tests/test_env_switches.py',
+           'dm/tools/impact_map.tsv', 'dm/games/game.py',
+           'dm/games/0100F2C0115B6000/game.tsv',
+           'docs/agents/README.md',
+           'docs/development.md')
 
 def git(*a):
     r = subprocess.run(['git', *a], cwd=REPO, capture_output=True, text=True)
@@ -348,6 +362,11 @@ def patch_tests_makefile(t):
     touch-pad block never ran once the fs lines were in, and the marker check could not notice
     its absence. Only the first block skips now.
     """
+    # Upstream spells the compiler `clang` (until ce99604a) or `$(CLANG)` (a variable that adds the
+    # sanitizer flags; issue #92). Anchors and inserted rules use whichever the file uses, so the
+    # patcher fits the tree before and after the sync that brings the variable.
+    CL = r'(?:\$\(CLANG\)|clang)'
+    cc = '$(CLANG)' if '$(CLANG)' in t else 'clang'
     if 'romfs_arc.c' not in t:
         P = [
             ('t_fs', 'clang -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_fs.c t_fs_stub.c ../hle_bigstack.c\n',
@@ -358,6 +377,7 @@ def patch_tests_makefile(t):
              'clang -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_fs_case.c ../hle_bigstack.c ../romfs_arc.c\n'),
         ]
         for name, old, new in P:
+            old = old.replace('clang', cc); new = new.replace('clang', cc)
             if old not in t: fail(f'{TESTS_MK}: {name} link line missing (upstream changed the test rules)')
             t = t.replace(old, new, 1)
         done('tests/Makefile romfs_arc.c')
@@ -374,7 +394,7 @@ def patch_tests_makefile(t):
         if rule_anchor not in t: fail(f'{TESTS_MK}: t_haptics_apple rule missing')
         t = t.replace(rule_anchor,
                       '$(B)/t_touchpad_geometry: t_touchpad_geometry.c ../touchpad_geometry.h ../dm_input.h | $(B)\n'
-                      '\tclang -O1 -Wall -I.. $(GINC) -o $@ t_touchpad_geometry.c\n' + rule_anchor, 1)
+                      '\t' + cc + ' -O1 -Wall -I.. $(GINC) -o $@ t_touchpad_geometry.c\n' + rule_anchor, 1)
         done('tests/Makefile touchpad test')
     # the key and controller map test (dm/host/input_map.h, seedds/nxnative#386): header-only too
     if 't_input_map' not in t:
@@ -388,9 +408,9 @@ def patch_tests_makefile(t):
         if rule_anchor not in t: fail(f'{TESTS_MK}: t_hid rule missing')
         t = t.replace(rule_anchor,
                       '$(B)/t_input_map: t_input_map.c ../input_map.h ../dm_input.h | $(B)\n'
-                      '\tclang -O1 -Wall -Werror -Wno-unused-function -I.. -o $@ t_input_map.c\n'
+                      '\t' + cc + ' -O1 -Wall -Werror -Wno-unused-function -I.. -o $@ t_input_map.c\n'
                       '$(B)/t_launcher_contract: t_launcher_contract.c ../input_map.h ../dm_input.h | $(B)\n'
-                      '\tclang -O1 -Wall -Werror -Wno-unused-function -I.. -o $@ t_launcher_contract.c\n' + rule_anchor, 1)
+                      '\t' + cc + ' -O1 -Wall -Werror -Wno-unused-function -I.. -o $@ t_launcher_contract.c\n' + rule_anchor, 1)
         body_old2 = '\t$(B)/t_input_map\n'
         t = t.replace(body_old2, body_old2 + '\t$(B)/t_launcher_contract\n', 1)
         run2 = '$(B)/t_input_map $(B)/t_haptics'
@@ -423,7 +443,7 @@ def patch_tests_makefile(t):
             continue
         if need:
             # the recipe line of that rule: append the accessor's object if absent
-            if ln.startswith('\t') and ln.lstrip().startswith('clang') and 'hle_profile.c' not in ln:
+            if ln.startswith('\t') and re.match(r'\s*' + CL, ln) and 'hle_profile.c' not in ln:
                 ln = ln.rstrip('\n') + ' ../hle_profile.c\n'
             elif not ln.startswith('\t') and ln.strip():
                 need = False          # a non-recipe line ends the rule
@@ -433,11 +453,8 @@ def patch_tests_makefile(t):
     mem_old = 'MEM_DEPS = t_svc_memory.c memory_profile/game_profile.h ../hle_svc.c ../hle_guestthread.c ../hle.h ../dm.h'
     if mem_old in t and 'hle_profile.c' not in t.split(mem_old)[1].split('\n')[0]:
         t = t.replace(mem_old, mem_old + ' ../hle_profile.c ../hle_profile.h', 1)
-        for tail in ('t_svc_memory.c\n', 't_svc_memory.c ../../gfx/nvn/nvn_dirty.c\n'):
-            t = t.replace('\t' + 'clang $(MEM_FLAGS)', '\t' + 'clang $(MEM_FLAGS)')  # no-op guard
-        import re as _re
-        t = _re.sub(r'(\tclang \$\(MEM_FLAGS\)[^\n]*?\.c)(\n)',
-                    lambda m: m.group(1) + ' ../hle_profile.c' + m.group(2), t)
+        t = re.sub(r'(\t' + CL + r' \$\(MEM_FLAGS\)[^\n]*?\.c)(\n)',
+                   lambda m: m.group(1) + ' ../hle_profile.c' + m.group(2), t)
     return done('tests/Makefile romfs_arc.c + hle_profile.c', t)
 
 ENT = '''# The unsigned IPA: an unsigned binary has no signature for a sideloader to read entitlements from,
@@ -567,36 +584,22 @@ def patch_nsp(t):
             "    # out_ipa reads `work`, so `work` must be assigned first (upstream's order had them the other\n"
             "    # way round; the --work-dir patch moved `work` up here and this line had to follow it).\n"
             "    " + oipa_new + "\n" + shadowed_line + "\n" + macpack_line)]))
-    P.append(('DOTNET_ROOT', 'list-runtimes', [(
-        "    env.setdefault('USER', getpass.getuser())   # xcodegen fails without USER (Couldn't find current username)",
-        """    env.setdefault('USER', getpass.getuser())   # xcodegen fails without USER (Couldn't find current username)
-    # nx_extract is a framework-dependent app: without DOTNET_ROOT the host refuses to start it even
-    # when dotnet is on PATH (~/.dotnet is not a registered install location). The root is parsed from
-    # `dotnet --list-runtimes`, not assumed to be the binary's directory: Homebrew's
-    # /opt/homebrew/bin/dotnet is a symlink into Cellar and its runtime lives in …/libexec, so dirname
-    # gave …/bin and the apphost failed to find its runtime. Also into os.environ: some steps run
-    # without env= and inherit this process's environment.
-    if not env.get('DOTNET_ROOT') and (dn := shutil.which('dotnet', path=env['PATH'])):
-        root = None
-        try:
-            out = subprocess.run([dn, '--list-runtimes'], capture_output=True, text=True, timeout=60).stdout
-            for ln in out.splitlines():
-                if not ln.startswith('Microsoft.NETCore.App'): continue
-                p = ln[ln.rfind('[') + 1:ln.rfind(']')] if '[' in ln else ''
-                if p.endswith('/shared/Microsoft.NETCore.App'): root = p[:-len('/shared/Microsoft.NETCore.App')]
-                elif p: root = p
-                break
-        except Exception: pass
-        env['DOTNET_ROOT'] = os.environ['DOTNET_ROOT'] = root or str(Path(dn).resolve().parent)
-    # The shader translator (dmsh_xlate_bin/dmsh_xlate) is a framework-dependent apphost like
-    # nx_extract, and a set-but-wrong DOTNET_ROOT is worse than none: the apphost stops searching
-    # once the variable is there, so a stale root from the environment (or the fallback above, wrong
-    # for Homebrew's symlink layout) kills the shader step while `dotnet` on PATH keeps working —
-    # nx_extract builds fine, then dmsh_build refuses with \"'xlate_source: lock … / actual' empty\".
-    # Verify by actually running the translator; when it answers nothing, try candidate roots and
-    # keep the first that works. With none verified the variable is dropped, so the apphost at least
-    # searches its default locations.
-    xlate_bin = repo / 'dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate'
+    # The shader translator (dmsh_xlate_bin/dmsh_xlate) is a framework-dependent apphost, and a
+    # set-but-wrong DOTNET_ROOT is worse than none: the apphost stops searching once the variable is
+    # there, so a stale root from the environment kills the shader step while `dotnet` on PATH keeps
+    # working — nx_extract builds fine, then dmsh_build refuses with "'xlate_source: lock … / actual' empty".
+    # Upstream's configure_dotnet() (called right before this) derives the root from `dotnet
+    # --list-runtimes`; what it does not do is check that the translator runs with it. This runs the
+    # translator, and when it answers nothing tries candidate roots and keeps the first that works;
+    # with none verified the variable is dropped, so the apphost searches its default locations.
+    # The marker is `xlate_answers`, a name only this code has: the earlier marker, `list-runtimes`,
+    # became upstream's own text (configure_dotnet) and silently switched this patch off at the sync
+    # to 75065df (issue #92). The first half of the old patch (parse the root from --list-runtimes)
+    # is upstream's now and is not carried any more.
+    P.append(('DOTNET_ROOT verification', 'xlate_answers', [(
+        "    configure_dotnet(env)\n",
+        """    configure_dotnet(env)
+    xlate_bin = repo / 'dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate'   # the fork's check of the root configure_dotnet chose (sync_upstream.py, issue #92)
     def xlate_answers(root):
         e = dict(env)
         if root: e['DOTNET_ROOT'] = str(root)
@@ -606,7 +609,7 @@ def patch_nsp(t):
             return r.returncode == 0 and bool(r.stdout.strip())
         except Exception:
             return False
-    if not xlate_answers(env.get('DOTNET_ROOT')):
+    if xlate_bin.exists() and not xlate_answers(env.get('DOTNET_ROOT')):
         cands = []
         if dn := shutil.which('dotnet', path=env['PATH']):
             real = Path(dn).resolve()
@@ -618,7 +621,8 @@ def patch_nsp(t):
             say(f'DOTNET_ROOT: {hit} (verified — the shader translator runs)')
         elif env.get('DOTNET_ROOT'):
             del env['DOTNET_ROOT']; os.environ.pop('DOTNET_ROOT', None)
-            say('DOTNET_ROOT: removed (none verified — the apphost searches its default locations)')""")]))
+            say('DOTNET_ROOT: removed (none verified — the apphost searches its default locations)')
+""")]))
     P.append(('pwd import', 'import ast, collections, ctypes, getpass, pwd', [(
         "import ast, collections, ctypes, getpass, hashlib, importlib.util, json, os, re, shlex, shutil, struct, subprocess, sys, tempfile, threading, time, types",
         "import ast, collections, ctypes, getpass, pwd, hashlib, importlib.util, json, os, re, shlex, shutil, struct, subprocess, sys, tempfile, threading, time, types")]))
@@ -652,26 +656,15 @@ def patch_nsp(t):
     # who wants telemetry on keeps it.
     env.setdefault('DOTNET_CLI_TELEMETRY_OPTOUT', '1')
     env.setdefault('DOTNET_NOLOGO', '1')""")]))
-    P.append(('3.9 survey note', "listed = ', '.join('{} ({})'.format(n, mods[n]['kind'])", [(
-        '''    if extra: notes.append(f'modules besides main / sdk: {", ".join(f"{n} ({mods[n]["kind"]})" for n in extra)}; the provisional profile loads {G["modules"][0]} (load order main, subsdk*, sdk)')''',
-        '''    if extra:
-        # Nested same-quote strings inside an f-string need Python 3.12 (PEP 701); this script has to
-        # parse on the 3.9 that ships with the Xcode command line tools, so keep the inner
-        # expressions out of the f-string.
-        listed = ', '.join('{} ({})'.format(n, mods[n]['kind']) for n in extra)
-        notes.append('modules besides main / sdk: ' + listed + '; the provisional profile loads '
-                     + G['modules'][0] + ' (load order main, subsdk*, sdk)')''')]))
-    P.append(('3.9 not-brought-up note', '_known = ", ".join("{} {}".format(v, b["display"])', [(
-        '''        say(f'[RED] this {artifact} uses {pkg_ver} ({disp}), which game profile {reg.id} was not brought up on ''',
-        '''        _known = ", ".join("{} {}".format(v, b["display"]) for v, b in reg.builds().items())
-        say(f'[RED] this {artifact} uses {pkg_ver} ({disp}), which game profile {reg.id} was not brought up on '''),
-        ('''({", ".join(f"{v} {b["display"]}" for v, b in reg.builds().items())})''',
-        '''({_known})''')]))
-    P.append(('3.9 derived note', '_reg = ", ".join("{} {}".format(v, b["display"]) for v, b in builds.items())', [(
-        '''        if pkg_ver not in builds: derived = f'{pkg_ver} is not a version game profile {g.id} registers ({", ".join(f"{v} {b["display"]}" for v, b in builds.items())})\'''',
-        '''        if pkg_ver not in builds:
-            _reg = ", ".join("{} {}".format(v, b["display"]) for v, b in builds.items())
-            derived = f'{pkg_ver} is not a version game profile {g.id} registers ({_reg})\'''')]))
+    # An AppleDouble file ("._<name>.nsp": macOS writes one beside every real file on an exFAT/FAT
+    # drive) carries the real file's name and title ID, so scan_nsps counted the one update NSP as two and
+    # left both out (7ae7ba65, the report's Hades II build). Hand-edited into the tree until issue #92,
+    # which had no protection: the next sync would have replaced the file with upstream's.
+    P.append(('AppleDouble skip', 'an AppleDouble file', [(
+        "        if p.stat().st_size == 0:   # an empty file left by an incomplete download",
+        "        if p.name.startswith('._'):\n"
+        "            continue   # an AppleDouble file: macOS writes one beside every real file on exFAT/FAT drives, and its name carries the same [title ID] — counting it made the one real update NSP read as two, and both were then left out (the report's Hades II build)\n"
+        "        if p.stat().st_size == 0:   # an empty file left by an incomplete download")]))
     # An external work folder (an exFAT USB drive, the report's own setup) can report entries
     # during shutil.rmtree's walk that vanish by their unlink — FileNotFoundError mid-delete — and
     # the partially deleted folder then breaks the copytree right after. "Make this path gone" is
@@ -757,38 +750,48 @@ def check_glslang(env):
     if not shutil.which('glslangValidator', path=env['PATH']):
         raise BuildError("glslangValidator is not installed: an OpenGL game's GLSL shaders need it to compile to SPIR-V (brew install glslang)")
 """)]))
+    # Every extracted version but the packed one holds a complete extra copy of the game; the fork drops
+    # them once the build is done (1887fe93: a game with several updates filled the drive). Hand-edited
+    # until issue #92; the function is added before extract(), and each ending of main() calls it.
+    PRUNE_FUNC = r'''def prune_intermediate_extracts(dirs, versions, pkg_ver):
+    """Every extracted version but the packed one: each holds a complete extra copy of the game (one
+    merged RomFS image per version), and only the packed version's files are reused by the next
+    build — when its inputs change, the intermediates are extracted again anyway (the packed version
+    is merged from them). The shader captures above still read them, so they are dropped only once
+    the build is done. A game without an update extracts one version and this deletes nothing."""
+    spare = [dirs[v] for v in versions if v != pkg_ver and dirs[v].is_dir()]
+    if not spare: return
+    say('deleting the intermediate extractions, one full copy of the game each (the packed version keeps its files): '
+        + ', '.join(d.name for d in spare))
+    for d in spare: rmtree(d)
+
+
+'''
+    P.append(('prune function', 'def prune_intermediate_extracts', [(
+        'def extract(nx, keys, ex, name, base, upd, cmp_dir, logs, g):', PRUNE_FUNC + 'def extract(nx, keys, ex, name, base, upd, cmp_dir, logs, g):')]))
+    for what, tail in (("Mac app", "        say(f'done: {out_ipa} ({tree_size(out_ipa)[1]"), ("Mac run", "        say(f'done: the game runs on the Mac"),
+                       ("Xcode project", "        say(f'ready: {workspace}')")):
+        P.append((f'prune after the {what}', "rmtree(work / 'tmp')\n        prune_intermediate_extracts(dirs, versions, pkg_ver)\n" + tail, [(
+            "rmtree(work / 'tmp')\n" + tail, "rmtree(work / 'tmp')\n        prune_intermediate_extracts(dirs, versions, pkg_ver)\n" + tail)]))
+    P.append(('prune after the IPA', "{ex}'); rmtree(ex)\n    else:\n        prune_intermediate_extracts", [(
+        "        say(f'deleting the extracted game files: {ex}'); rmtree(ex)\n",
+        "        say(f'deleting the extracted game files: {ex}'); rmtree(ex)\n    else:\n        prune_intermediate_extracts(dirs, versions, pkg_ver)\n")]))
     for name, marker, pairs in P:
         if marker in t:
             skip(f'NSP script {name} (already patched)'); continue
-        hit = True
         for old, new in pairs:
             if old not in t:
-                if name.startswith('3.9'):   # upstream may fix these themselves; a miss is not an error
-                    hit = False; skip(f'NSP script {name} (upstream no longer has the pattern)'); break
                 fail(f'scripts/build_ipa_from_nsp.py: patch "{name}" anchor missing')
             t = t.replace(old, new, 1)
-        if hit: done(f'NSP script {name}')
+        done(f'NSP script {name}')
     return t
-
-def patch_shader_split(t):
-    # Upstream fixed the same 3.9 f-string themselves (d4249e5: a label variable); either fix ends it.
-    if 'label = re.sub(r"^(\\.\\./)+", "", os.path.normpath(pk.mount + name))' in t: return skip('shader_split.py (upstream fixed it)')
-    if 'a backslash cannot sit inside an f-string expression' in t: return skip('shader_split.py (already patched)')
-    old = '''        ue_inline_shaders(d, f'/{rel}#{re.sub(r"^(\\.\\./)+", "", os.path.normpath(pk.mount + name))}', out)'''
-    if old not in t: fail('dm/gfx/tools/shader_split.py: ue_inline_shaders anchor missing')
-    # The same shape as upstream's own fix (d4249e5), so the marker holds whichever of the two applied
-    new = '''        label = re.sub(r"^(\\.\\./)+", "", os.path.normpath(pk.mount + name))   # a backslash cannot sit inside an f-string expression before 3.12
-        ue_inline_shaders(d, f'/{rel}#{label}', out)'''
-    return done('shader_split.py 3.9', t.replace(old, new, 1))
 
 NVM = 'dm/gfx/nvn/nvn_mtl.m'
 def patch_nvn_mtl(t):
-    # The fork's fix for the iOS save-load freeze (NX2Apple issue #4): an upload batch's commit can sit
-    # recorded in the open replay block (rec_commit_upload) while the submit thread sleeps on a slot or
-    # on g_up_pending — nothing else hands the block over mid-submission, so the submission can never
-    # end and the wait never resolves. Upstream fixed the up_begin half (Little Nightmares II) and then
-    # ported our mtl_finish_gpu half with their own comment (b87a0cc, plus their up_flush self-publish
-    # for waiters on any thread); the markers accept either comment, ours or theirs.
+    # BC decode for GPUs without BC support (six hunks). The fork's two save-load freeze hunks (NX2Apple
+    # issue #4: 'up_begin publish' and 'finish publish') are gone: upstream has both (the up_begin
+    # rec_publish and the mtl_finish_gpu on_sub_thread() rec_publish, b87a0cc; checked against
+    # seedds/main for issue #92), and the carried hunks only said "already patched".
     P = [
         # BC decode on GPUs without BC support (profile tex_bc_cpu; nvn_bcdec.c is an OURS file)
         ('bc cpu globals', ['g_bc_cpu;'], [(
@@ -820,18 +823,6 @@ static int g_bc_cpu;       // decode BC on the CPU: no GPU support and the profi
         ('bc cpu free', ['free(bc_tmp);\n    free(part);'], [(
             "    free(part);\n    up_flush();\n    return mt;",
             "    free(bc_tmp);\n    free(part);\n    up_flush();\n    return mt;")]),
-        ('up_begin publish', ['the iOS save-load freeze of NX2Apple issue #4', "Little Nightmares II's first render passes"], [(
-            '''    unsigned slot = g_up_seq++ % 3;
-    up_wait_zero(&g_up_alloc_busy[slot]);''',
-            '''    unsigned slot = g_up_seq++ % 3;
-    if (atomic_load(&g_up_alloc_busy[slot])) rec_publish();   // The commit of the batch that still holds this slot sits in the open replay block (rec_commit_upload). Hand the block to the encode thread before sleeping on the slot: a submit thread that opens a 4th batch within one submission would otherwise wait forever — nothing else hands the block over mid-submission, and the submission cannot end while up_begin blocks (the iOS save-load freeze of NX2Apple issue #4)
-    up_wait_zero(&g_up_alloc_busy[slot]);''')]),
-        ('finish publish', ['if (on_sub_thread()) rec_publish();'], [(
-            '''    if (g_fence) mtl_wait(g_fence, UINT64_MAX);
-    up_wait_zero(&g_up_pending);''',
-            '''    if (g_fence) mtl_wait(g_fence, UINT64_MAX);
-    if (on_sub_thread()) rec_publish();   // Pending upload commits sit in the open replay block: hand it over before waiting on g_up_pending, or a loader's QueueFinish mid-submission (Three Houses-style per-resource waits) sleeps forever. Other threads (suspend, diagnostics) cannot publish the submit thread's block; their waits resolve once the submission ends
-    up_wait_zero(&g_up_pending);''')]),
     ]
     for name, markers, pairs in P:
         if any(m in t for m in markers):
@@ -1128,11 +1119,15 @@ def patch_test_romfs_startup(t):
     """The test compiles main.m's RomFS locator alone, with a stub for each name it needs. The fork's
     locator reads the game's id and romfs_marker through dm_profile() (the runtime profile, patch_main_m),
     which upstream's stubs do not provide: clang stopped on "call to undeclared function dm_profile".
-    The fixture gets a dm_profile() with the marker the test already uses."""
-    if 'fixture_profile' in t: return skip('test_romfs_startup dm_profile stub (already patched)')
-    old = "#define DM_GAME_ROMFS_MARKER \"marker\"\\n'"
-    if old not in t: fail('dm/ios/tests/test_romfs_startup.py: the fixture preamble anchor is missing'); return t
-    return done('test_romfs_startup dm_profile stub', t.replace(old, old + "\n                          " + repr(ROMFS_TEST_STUB), 1))
+    The fixture gets a dm_profile() with the marker the test already uses. The same locator asks
+    dm_picked_data_path() (DataBookmark.m, the Files-app pick), so the fixture answers it from a variable
+    (argv[4]) and a test puts the player's choice anywhere on disk."""
+    if 'fixture_profile' in t: skip('test_romfs_startup dm_profile stub (already patched)')
+    else:
+        old = "#define DM_GAME_ROMFS_MARKER \"marker\"\\n'"
+        if old not in t: fail('dm/ios/tests/test_romfs_startup.py: the fixture preamble anchor is missing'); return t
+        t = done('test_romfs_startup dm_profile stub', t.replace(old, old + "\n                          " + repr(ROMFS_TEST_STUB), 1))
+    return anchored('dm/ios/tests/test_romfs_startup.py', PICKED_EDITS)(t)
 
 def patch_test_profile_pack(t):
     """Upstream packs the RomFS into the IPA; the fork's default is the slim package (patch_build_ipa:
@@ -1149,6 +1144,9 @@ def patch_test_profile_pack(t):
 FORK_SWITCHES = {
     'DM_FULL_ROMFS': ('diagnostic', '`=1` in `build_ipa.sh` packs the game data into the IPA as it did before the slim package; the default leaves it in `Documents/games/<id>/` (`romfs.img`, `aoc/<index>.img`) and the DLC beside it. Only for small games — a full package of a large one is many GB and iOS refuses it (`PackageExtractionFailed`)'),
     'DM_PROFILE': ('path', '`=<file>`: the runtime game profile (layout, switches, tables) the host reads at start, which is how one host binary serves every game (the launcher architecture); the compiled `game_profile.h` stays the fallback, and `DM_PROF_<key>` overrides sit on top of it (`hle_profile.h`)'),
+    # seedds/nxnative#386 (the Controls page); the rows go when it merges and the table comes from upstream
+    'DM_KEYMAP': ('player', 'Mac keyboard: `<name>=<key code>,…` puts a button (`A` … `Down`), a stick direction (`LUp` … `RRight`) or `Shake` on another key (macOS virtual key code, or `none`); one key holds one function (`input_map.h`)'),
+    'DM_PAD_MAP': ('player', 'Mac controllers: `<name>=<name>,…` makes the button that sends the first by default send the second (or `none`), e.g. `A=B,B=A` swaps them (`input_map.h`)'),
 }
 
 def patch_env_switches(t):
@@ -1174,6 +1172,491 @@ def patch_hades2(t):
     say('  … restoring the fork\'s Hades II profile (update v1, measured slots, notes)')
     return done('Hades II profile v1', fork)
 
+LAUNCHER_HELPERS = r'''static int dir_has_entries(const char *path) {   // anything inside at all (a save folder, a log folder)
+    DIR *d = opendir(path); if (!d) return 0;
+    struct dirent *e; int any = 0;
+    while ((e = readdir(d))) if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..")) { any = 1; break; }
+    closedir(d); return any;
+}
+
+static int copy_file(const char *from, const char *to) {
+    FILE *in = fopen(from, "rb"); if (!in) return 0;
+    FILE *out = fopen(to, "wb"); if (!out) { fclose(in); return 0; }
+    char buf[1 << 16]; size_t n; int ok = 1;
+    while ((n = fread(buf, 1, sizeof buf, in)) > 0) if (fwrite(buf, 1, n, out) != n) { ok = 0; break; }
+    if (ferror(in)) ok = 0;
+    fclose(in); if (fclose(out)) ok = 0;
+    if (!ok) unlink(to);
+    return ok;
+}
+
+/// Recursive copy for the one-time migration of a save folder. Symlinks are followed (a save is
+/// plain files); a file that already exists is left alone, so a half-finished copy can be resumed.
+static void copy_tree(const char *from, const char *to) {
+    mkdirs(to);
+    DIR *d = opendir(from); if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        char a[PATH_MAX], b[PATH_MAX];
+        snprintf(a, sizeof a, "%s/%s", from, e->d_name);
+        snprintf(b, sizeof b, "%s/%s", to, e->d_name);
+        struct stat st;
+        if (stat(a, &st)) continue;
+        if (S_ISDIR(st.st_mode)) copy_tree(a, b);
+        else if (S_ISREG(st.st_mode) && access(b, F_OK)) copy_file(a, b);
+    }
+    closedir(d);
+}
+
+'''
+
+LAUNCHER_BLOCK = r'''    // Saves and logs beside the game, not under ~/Library: a library folder the user can move or
+    // keep on an external drive has to carry its saves with it, or they are effectively lost the
+    // moment the folder moves (the files are still in ~/Library, where nobody looks for them).
+    //
+    // The library root is the folder the app sits in, when that folder also holds games/ — the
+    // layout the Mac front end writes (<out>/<id>.app, <out>/games/<id>/romfs.img). A bundle
+    // copied somewhere else keeps the old ~/Library paths, so nothing breaks for a user who never
+    // used the launcher's folder.
+    {
+        char appdir[PATH_MAX]; snprintf(appdir, sizeof appdir, "%s", exe);
+        // Four cuts: <…>/<id>.app/Contents/MacOS/<launcher> → MacOS → Contents → <id>.app → the folder
+        // holding it. Three landed on the .app itself, so the probe looked for <id>.app/games — which
+        // never exists — and the migration never ran (the report: saves stayed in ~/Library).
+        *strrchr(appdir, '/') = 0; *strrchr(appdir, '/') = 0;
+        *strrchr(appdir, '/') = 0; *strrchr(appdir, '/') = 0;
+        // The marker file the Mac front end writes beside the .app (a dot file, so the Finder hides
+        // it): this folder is a game library, and the game's saves and log live in it. DM_ROOT (the
+        // learned shader state, env.txt), temp/ and everything else stay under ~/Library — only
+        // what is needed and reused comes along, so the library folder stays lean.
+        char probe[PATH_MAX]; snprintf(probe, sizeof probe, "%s/.nx2apple-library", appdir);
+        if (!stat(probe, &st)) {
+            snprintf(save, sizeof save, "%s/save/%s", appdir, id);
+            snprintf(logs, sizeof logs, "%s/log", appdir);
+            // First run after this change: bring the old saves across rather than starting the
+            // player on an empty save slot. Copied, not moved — an older build of the same app
+            // still reads the old place, and a copy is cheap next to a save.
+            char oldsave[PATH_MAX], oldlog[PATH_MAX];
+            snprintf(oldsave, sizeof oldsave, "%s/save", sup);
+            snprintf(oldlog, sizeof oldlog, "%s/Library/Logs/nxnative/%s.log", home, id);
+            mkdirs(save); mkdirs(logs);
+            if (dir_has_entries(oldsave) && !dir_has_entries(save)) {
+                copy_tree(oldsave, save);
+                fprintf(stderr, "launcher: saves copied from %s to %s (they now live with the game)\n", oldsave, save);
+            }
+            // The previous session's log becomes the .prev.log, as the rotation below would have
+            // it: the .log itself is opened fresh right after, and copying into it would be
+            // truncated away by that open.
+            char newprev[PATH_MAX]; snprintf(newprev, sizeof newprev, "%s/%s.prev.log", logs, id);
+            // Explicit compares, not !stat(): stat() returns -1 when the file is missing, which is
+            // truthy — reading "!" as "does not exist" here inverted the condition and skipped the
+            // copy (found by the end-to-end test below).
+            if (stat(oldlog, &st) == 0 && stat(newprev, &st) != 0) {
+                if (copy_file(oldlog, newprev)) fprintf(stderr, "launcher: the previous log was copied from %s\n", oldlog);
+            }
+        }
+    }
+'''
+
+LAUNCHER_SAY = r'''    // Say where this game reads and writes, on every start: a player checking whether their saves
+    // moved with the game should not have to know the migration rules.
+    fprintf(stderr, "launcher: saves %s\nlauncher: log %s\n", save, log);
+'''
+
+LAUNCHER_SWIFT_SECTION = r'''/// Where this game's data comes from, and a picker to change it.
+///
+/// The app can only read files it owns unless the player hands it a location through the document
+/// picker — so a game's RomFS kept on an external drive or in iCloud Drive could not be used at all
+/// before this. Picking an image (romfs.img) or a folder stores a bookmark (DataBookmark.m), and
+/// romfs_locate() prefers it from the next launch on.
+private struct GameDataSection: View {
+    @State private var picked: String = ""
+    @State private var note: String = ""
+    @State private var picking = false
+
+    var body: some View {
+        Section {
+            HStack {
+                Text("Game data")
+                Spacer()
+                Text(picked.isEmpty ? "This app's folder" : (picked as NSString).lastPathComponent)
+                    .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            }
+            Button(picked.isEmpty ? "Choose game data…" : "Choose a different location…") { picking = true }
+            if !picked.isEmpty {
+                Button("Use the app's own data again", role: .destructive) {
+                    dm_clear_picked_data(); refresh(); note = ""
+                }
+            }
+        } footer: {
+            Text(note.isEmpty
+                 ? "Pick the game's romfs.img or its RomFS folder — an external drive or iCloud Drive works. The app remembers the choice; a re-signed build asks once more."
+                 : note)
+        }
+        .sheet(isPresented: $picking) {
+            DocumentPicker { url in
+                picking = false
+                if dm_store_picked_data(url) {
+                    note = "Saved. The game uses this location from the next start."
+                    refresh()
+                } else {
+                    note = "That location could not be remembered — try a different one."
+                }
+            } onCancel: { picking = false }
+        }
+        .onAppear(perform: refresh)
+    }
+
+    private func refresh() {
+        // ObjC BOOL* is ObjCBool, not Bool: the bookmark header takes an indirect flag for
+        // "the bookmark exists but does not resolve under this signature", which is the one
+        // state worth telling the player about.
+        var stale: ObjCBool = false
+        picked = dm_picked_data_path(&stale) ?? ""
+        if stale.boolValue && picked.isEmpty {
+            note = "The location you picked before is no longer readable (the app was signed differently). Please choose it again."
+        }
+    }
+}
+
+/// UIDocumentPickerViewController for files and folders, in the two callbacks a SwiftUI sheet wants.
+private struct DocumentPicker: UIViewControllerRepresentable {
+    let onPick: (URL) -> Void
+    let onCancel: () -> Void
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        // .open (not .import): the file stays where it is and the bookmark keeps pointing at it,
+        // which is the whole point — an import would copy 16 GB into the app's container.
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: false)
+        picker.allowsMultipleSelection = false
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ vc: UIDocumentPickerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(onPick: onPick, onCancel: onCancel) }
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onPick: (URL) -> Void
+        let onCancel: () -> Void
+        init(onPick: @escaping (URL) -> Void, onCancel: @escaping () -> Void) {
+            self.onPick = onPick; self.onCancel = onCancel
+        }
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            if let url = urls.first { onPick(url) } else { onCancel() }
+        }
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { onCancel() }
+    }
+}
+
+'''
+
+ENV_SWITCHES_VERIFY = r'''def verify_texts(paths):
+    """Every DM_* name these files mention must be one the sources read (docs/env_switches.tsv), or a
+    family a row documents: DM_PROF_<key> builds its name at run time, so no row can exist per member
+    and the table names the family instead. A name ending in _ is a family prefix itself.
+
+    Written after two replies in one day recommended DM_LOG_UEMALLOC and DM_NVN_ALIAS_TRACE, neither
+    of which exists: a name recalled from memory rather than read out of the table. Run this over a
+    draft before posting it.
+    """
+    known, family = set(), set()
+    if TABLE.exists():
+        for l in TABLE.read_text().split('\n'):
+            f = l.split('\t')
+            if not f or not f[0].startswith('DM_'): continue
+            known.add(f[0])
+            for m in re.finditer(r'(' + NAME + r')_[<*]', '\t'.join(f[1:])):
+                family.add(m.group(1))
+    bad = []
+    for p in paths:
+        for n in sorted(set(re.findall(NAME, Path(p).read_text(encoding='utf-8', errors='replace')))):
+            if n.endswith('_'): continue                    # a family prefix itself ("DM_NVN_*")
+            if n not in known and not any(k.startswith(n + '_') for k in known) and n not in family:
+                bad.append((p, n))                          # unknown, and no row starts with it
+    return bad, len(known)
+
+'''
+
+ENV_SWITCHES_MAIN = r'''    if sys.argv[1:2] == ['--verify']:
+        problems, known = verify_texts(sys.argv[2:])
+        for p, n in problems: print(f'{p}: {n} is not a switch the sources read')
+        print(f'{len(problems)} unknown name(s) against {known} known switches')
+        raise SystemExit(1 if problems else 0)
+'''
+
+TEST_ENV_DOC = r'''A switch the code reads that the table does not list, a row for a switch nothing reads any more, or a row without a meaning fails here.
+
+`--verify <file>...` checks a text instead: every DM_* it names must be a real switch. It exists because two replies wrote DM_LOG_UEMALLOC and DM_NVN_ALIAS_TRACE from memory in
+one day, and neither is a switch — a reader who trusts them wastes a run and learns nothing.'''
+
+TEST_ENV_TESTS = r'''    def test_verify_accepts_a_real_switch_and_rejects_an_invented_one(self):
+        with tempfile.TemporaryDirectory() as d:
+            good = Path(d, 'good.md'); good.write_text('Set `DM_IMPORTS=1` to see the imports.\n')
+            r = subprocess.run([sys.executable, str(REPO / 'dm/tools/env_switches.py'), '--verify', str(good)], cwd=REPO, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+            bad = Path(d, 'bad.md'); bad.write_text('Set `DM_LOG_UEMALLOC=1` to see the allocations.\n')
+            r = subprocess.run([sys.executable, str(REPO / 'dm/tools/env_switches.py'), '--verify', str(bad)], cwd=REPO, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 1, 'an invented switch must fail the check')
+            self.assertIn('@UEM@', r.stdout)
+
+    def test_verify_ignores_a_prefix_and_a_family(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d, 'prefixes.md'); f.write_text('`DM_PROF_<key>` overrides; `DM_NVN_*` are the graphics ones; `DM_MEMSTAT` is real.\n')
+            r = subprocess.run([sys.executable, str(REPO / 'dm/tools/env_switches.py'), '--verify', str(f)], cwd=REPO, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+'''.replace('@UEM@', 'DM_LOG_' + 'UEMALLOC')   # not spelled out: env_switches.py would read a quoted name in this file as a switch
+
+TEST_PICKED_METHOD = r'''    def test_the_location_the_player_picked_wins_over_everything(self):
+        """The Files-app pick (DataBookmark): an image, a folder holding one, or a plain tree."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); doc = root / 'Documents'; doc.mkdir()
+            tmp = root / 'temp'; tmp.mkdir(); bundle = root / 'App'; bundle.mkdir()
+            source = root / 'source'; source.mkdir(); (source / 'marker').write_text('resource')
+            image.pack(source, bundle / 'romfs.img')
+            # something the app would otherwise use, so "wins" means something
+            image.pack(source, doc / 'romfs.img')
+            external = root / 'external'; external.mkdir()
+
+            def locate(picked=None):
+                argv = [str(self.locator), str(doc), str(tmp), str(bundle)] + ([str(picked)] if picked else [])
+                result = subprocess.run(argv, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return result.stdout.strip()
+
+            # 1. the picked path IS the image
+            image.pack(source, external / 'mine.img')
+            self.assertEqual(locate(external / 'mine.img'), str(external / 'mine.img'))
+            # 2. the picked path is a folder holding romfs.img
+            image.pack(source, external / 'romfs.img')
+            self.assertEqual(locate(external), str(external / 'romfs.img'))
+            # 3. the picked path is a plain RomFS tree
+            (external / 'romfs.img').unlink(); (external / 'marker').write_text('resource')
+            self.assertEqual(locate(external), str(external))
+            # 4. a picked path holding none of this game's data falls through to the app's own copy
+            empty = root / 'empty'; empty.mkdir()
+            self.assertEqual(locate(empty), str(doc / 'romfs.img'))'''
+
+# ---- Fork edits that had no protection until issue #92. Each was made by hand in a vendored file the
+# sync takes from upstream whenever upstream changes it; each is now a patcher, written against the
+# text of seedds/nxnative main (checked with scripts/tests/test_sync_patchers.py), with its own marker. ----
+
+def anchored(path, edits):
+    """A patcher from (name, marker, old, new) edits: `new` replaces the one occurrence of `old`, and an
+    edit whose marker is already in the text is skipped (idempotent). An anchor that is missing or
+    occurs more than once fails the run loudly."""
+    def patch(t):
+        for name, marker, old, new in edits:
+            if marker in t:
+                skip(f'{path} {name} (already patched)'); continue
+            if t.count(old) != 1:
+                fail(f'{path}: patch "{name}" anchor {"missing" if old not in t else "not unique"}: {old[:70]!r}')
+            t = t.replace(old, new, 1)
+            done(f'{path} {name}')
+        return t
+    return patch
+
+# The Mac launcher's library-folder saves and log (c7ea1f56, 0deafaf5, 2b7e9e89, 0f779f5e). Temporary:
+# seedds/nxnative#460 adds `dataFolder` (and DM_SAVE / DM_LOG_DIR relative to the app), which does the
+# same job properly (it moves more than the save and the log, and needs no marker file). When #460 is in
+# the fork, this patcher goes and the front end writes the preference per app instead.
+LAUNCHER_C = 'dm/mac/launcher.c'
+patch_launcher_c = anchored(LAUNCHER_C, [
+    ('dirent include', '<dirent.h>', '#include <sys/stat.h>\n', '#include <sys/stat.h>\n#include <dirent.h>\n'),
+    ('copy helpers', 'static int dir_has_entries',
+     'static void env_file(const char *path) {', LAUNCHER_HELPERS + 'static void env_file(const char *path) {'),
+    ('library folder', '.nx2apple-library',
+     '    snprintf(logs, sizeof logs, "%s/Library/Logs/nxnative", home);\n',
+     '    snprintf(logs, sizeof logs, "%s/Library/Logs/nxnative", home);\n' + LAUNCHER_BLOCK),
+    ('say where', 'launcher: saves %s',
+     '    mkdirs(save); mkdirs(temp); mkdirs(logs);\n    rename(log, prev);\n',
+     '    mkdirs(save); mkdirs(temp); mkdirs(logs);\n' + LAUNCHER_SAY + '    rename(log, prev);\n'),
+])
+
+# The runtime game profile (73a89fb0): one host binary serves every game, so the constants the host took
+# from game_profile.h at compile time (DM_GAME_<KEY> macros) are read through dm_profile() (hle_profile.c;
+# without DM_PROFILE it falls back to the compiled macros, so behaviour is unchanged). Done as a
+# substitution of the macro names, outside strings and comments, so it follows whatever upstream does
+# around them (d8b8d642 rewrote mem_init_once and added DM_ALIAS_SIZE). A macro with no field in
+# struct dm_profile (DM_GAME_STDALLOC_CAP) stays a compile-time constant.
+PROFILE_FIELDS = {
+    'DM_GAME_FPS_TARGET': 'fps_target', 'DM_GAME_ENV': 'genv', 'DM_GAME_ALLOC_BIG_ALIGN': 'alloc_big_align',
+    'DM_GAME_PAD_LAYOUT': 'pad_layout', 'DM_GAME_MEM_RESERVE': 'mem_reserve', 'DM_GAME_MEM_ALIAS': 'mem_alias',
+    'DM_GAME_MEM_STACK': 'mem_stack', 'DM_GAME_APP_POOL': 'app_pool', 'DM_GAME_MEM_USED': 'mem_used',
+    'DM_GAME_MEM_MAP_LIMIT': 'mem_map_limit', 'DM_GAME_SYS_RESOURCE': 'sys_resource', 'DM_GAME_PROGRAM_ID': 'program_id',
+}
+# a string literal or a comment (kept as it is), else one of the macro names
+_PROFILE_TOKEN = re.compile(r'("(?:[^"\\\n]|\\.)*"|//[^\n]*|/\*.*?\*/)|\b(' + '|'.join(PROFILE_FIELDS) + r')\b', re.S)
+PROFILE_PATHS = ('dm/host/hle_svc.c', 'dm/host/hle_os.c', 'dm/host/hle_fpslock.c', 'dm/host/loader.c', 'dm/ios/Sources/DmGamepad.m')
+
+def profile_patcher(path, paren=False):
+    """paren: wrap the replacement (hle_svc.c defines macros from them, RESERVE and the like)."""
+    def patch(t):
+        n = 0
+        def sub(m):
+            nonlocal n
+            if m.group(1): return m.group(1)
+            n += 1
+            r = 'dm_profile()->' + PROFILE_FIELDS[m.group(2)]
+            return f'({r})' if paren else r
+        out = _PROFILE_TOKEN.sub(sub, t)
+        if n: done(f'{path} runtime profile ({n} constants read through dm_profile())')
+        else: skip(f'{path} runtime profile (already patched)')
+        return out
+    return patch
+
+patch_hle_svc = profile_patcher('dm/host/hle_svc.c', paren=True)
+patch_hle_os = profile_patcher('dm/host/hle_os.c')
+patch_hle_fpslock = profile_patcher('dm/host/hle_fpslock.c')
+patch_loader = profile_patcher('dm/host/loader.c')
+patch_dmgamepad = profile_patcher('dm/ios/Sources/DmGamepad.m')
+
+# The Files-app "Game data" pick on the iPhone (DataBookmark.m, main.m's romfs_locate; main.m is patched
+# by patch_main_m). Launcher.swift gets the section and the picker, project.yml the bridging header.
+LAUNCHER_SWIFT = 'dm/ios/Sources/Launcher.swift'
+patch_launcher_swift = anchored(LAUNCHER_SWIFT, [
+    ('game data section', 'struct GameDataSection', 'private struct LauncherView: View {', LAUNCHER_SWIFT_SECTION + 'private struct LauncherView: View {'),
+    ('game data row', 'GameDataSection()',
+     '                    Section {\n                        HStack {\n                            Text("Memory available")',
+     '                    GameDataSection()\n                    Section {\n                        HStack {\n                            Text("Memory available")'),
+])
+patch_project_yml = anchored('dm/ios/project.yml', [
+    ('bridging header', 'SWIFT_OBJC_BRIDGING_HEADER',
+     '      SWIFT_VERSION: "5.0"                         # Launcher.swift (SwiftUI)\n',
+     '      SWIFT_VERSION: "5.0"                         # Launcher.swift (SwiftUI)\n'
+     '      SWIFT_OBJC_BRIDGING_HEADER: Sources/DmIOS-Bridging-Header.h   # DataBookmark (the Files app pick)\n'),
+])
+# test_xcode_workflow mocks every check build_ipa_from_nsp.main runs; check_glslang is the fork's (patch_nsp)
+patch_test_xcode_workflow = anchored('dm/ios/tests/test_xcode_workflow.py', [
+    ('check_glslang mock', "'check_glslang': None",
+     "'check_prereqs': None, 'check_metal': None,", "'check_prereqs': None, 'check_metal': None, 'check_glslang': None,"),
+])
+
+# `env_switches.py --verify <file>...` (a draft's DM_* names against the table) and its tests: fork-only additions
+patch_env_switches_py = anchored('dm/tools/env_switches.py', [
+    ('--verify', 'def verify_texts',
+     "if __name__ == '__main__':\n    text, bad, unread = rows()",
+     ENV_SWITCHES_VERIFY + "if __name__ == '__main__':\n" + ENV_SWITCHES_MAIN + "    text, bad, unread = rows()"),
+])
+patch_test_env_switches = anchored('dm/tools/tests/test_env_switches.py', [
+    ('docstring', '`--verify <file>...`',
+     'A switch the code reads that the table does not list, a row for a switch nothing reads any more, or a row without a meaning fails here."""\n',
+     TEST_ENV_DOC + '"""\n'),
+    ('tempfile import', 'import tempfile\n', 'import sys\nimport unittest\n', 'import sys\nimport tempfile\nimport unittest\n'),
+    ('verify tests', 'test_verify_accepts_a_real_switch', "\n\nif __name__ == '__main__':",
+     '\n' + TEST_ENV_TESTS + "\n\nif __name__ == '__main__':"),
+])
+# the impact map has a row per host file (the front end's key map is the fork's, seedds/nxnative#386)
+patch_impact_map = anchored('dm/tools/impact_map.tsv', [
+    ('input_map.h row', 'dm/host/input_map.h',
+     "dm/host/front_mac.m\tpresent:*\tthe Mac front end\n",
+     "dm/host/front_mac.m\tpresent:*\tthe Mac front end\ndm/host/input_map.h\tpresent:*\tthe Mac front end's key and controller button map\n"),
+])
+
+DOCS_AGENTS_BULLETS = r'''- **A test that has not failed is not evidence.** A fix's test must fail before the fix and pass after it; run it both ways, or at least confirm it is collected and that its assertion touches the changed behaviour. Three failures in two days, all of them mine: a test appended *after* the class's closing brace (XCTest never collected it — the suite reported the same count before and after it existed, and I read that as a pass); `assertIn('TEXT_LO = segs[0][1]', src)`, a string match that stays green while the module raises `NameError` on import; and a release-notes splitter whose two failing cases only appeared once the test existed. A green suite is a claim about the code only if the test would have been red.
+- **A switch you recommend exists.** Before naming a `DM_*` in a reply, an issue body or a PR, check it against `docs/env_switches.tsv` (generated from the sources): `python3 dm/tools/env_switches.py --verify draft.md` fails on every name that is neither a row nor a documented family. Two replies written from memory in one day told reporters to set `DM_LOG_UEMALLOC` and `DM_NVN_ALIAS_TRACE`, neither of which exists; they wasted a run each and learned nothing.'''
+DEV_KEYMAP_SENTENCE = r'''`DM_KEYMAP=<name>=<key code>,…` puts a button, a stick direction (the right stick too, on no key by default) or `Shake` on another key, and `DM_PAD_MAP=<name>=<name>,…` changes what a controller's buttons send (`A=B,B=A` swaps them; `input_map.h`).'''
+
+# The fork's own lines in vendored docs and in one game profile (tex_bc_cpu, the CPU BC decoder).
+patch_hades_bc_profile = anchored('dm/games/0100F2C0115B6000/game.tsv', [
+    ('tex_bc_cpu', 'tex_bc_cpu\ton',
+     'tex_flush_upload\ton\n',
+     'tex_flush_upload\ton\n# BC textures on GPUs without BC support (A15/A16 and older): decode them on the CPU into\n'
+     '# RGBA8 (nvn_bcdec.c). No effect on Macs and A19+ devices, which keep the GPU path.\ntex_bc_cpu\ton\n'),
+])
+patch_docs_agents_readme = anchored('docs/agents/README.md', [
+    ('fork rules', 'A switch you recommend exists', '\n\n## Checklist for a new title', '\n' + DOCS_AGENTS_BULLETS + '\n\n## Checklist for a new title'),
+])
+patch_docs_development = anchored('docs/development.md', [
+    ('key map sentence', '`DM_KEYMAP=<name>=<key code>',
+     'with the controllers from player 2 on. The window goes fullscreen from',
+     'with the controllers from player 2 on. ' + DEV_KEYMAP_SENTENCE + ' The window goes fullscreen from'),
+])
+
+GAME_PY_PROFILE = r'''    elif len(a) == 3 and a[0] == 'profile':   # the runtime profile the host reads from DM_PROFILE (hle_profile.h): the header's values, as the TSV form
+        g = load(a[1]); out = Path(a[2]); out.parent.mkdir(parents=True, exist_ok=True)
+        M = dict(re.findall(r'^#define (DM_GAME_\w+) (.*)$', header(g), re.M))   # exactly what the compiled profile would hold
+        # macro → the runtime profile's key (hle_profile.c set_kv); the header's spelling of the value is the file's
+        KEYS = [('title_id', 'ID'), ('program_id', 'PROGRAM_ID'), ('name', 'NAME'), ('romfs_marker', 'ROMFS_MARKER'),
+                ('modules', 'MODULES'), ('mem_reserve', 'MEM_RESERVE'), ('mem_alias', 'MEM_ALIAS'), ('mem_stack', 'MEM_STACK'),
+                ('app_pool', 'APP_POOL'), ('mem_used', 'MEM_USED'), ('sys_resource', 'SYS_RESOURCE'), ('mem_map_limit', 'MEM_MAP_LIMIT'),
+                ('present_interval', 'PRESENT_DISPLAY'), ('core_preempt', 'CORE_PREEMPT'), ('alloc_big_align', 'ALLOC_BIG_ALIGN'),
+                ('fps_target', 'FPS_TARGET'), ('fps_hold', 'FPS_HOLD'), ('present_snap', 'PRESENT_SNAP'), ('pso_mtl4', 'PSO_MTL4'),
+                ('shared_font', 'SHARED_FONT_TTF'), ('pad_layout', 'PAD_LAYOUT'), ('op_mode', 'OPMODE'), ('perf_mode', 'PERF_BOOST'),
+                ('feedback_snap', 'FEEDBACK_SNAP'), ('tex_flush_upload', 'TEX_FLUSH_UPLOAD'), ('render_cond', 'RENDER_COND'),
+                ('tex_dirty_upload', 'TEX_DIRTY_UPLOAD'), ('tex_dyn_slots', 'TEX_DYN_SLOTS'), ('gpu_timestamps', 'GPU_TS_SEGMENT'),
+                ('vconv_range', 'VCONV_RANGE'), ('game_args', 'ARGS'), ('game_env', 'ENV')]
+        def val(macro):   # the header's C spelling → the file's plain spelling
+            v = M.get('DM_GAME_' + macro)
+            if v is None: return None
+            v = v.strip()
+            if v.startswith('{') and v.endswith('}'):   # {"main", "sdk"} → main sdk
+                return ' '.join(x.strip().strip('"') for x in v[1:-1].split(',') if x.strip())
+            if v.startswith('"'): return v[1:-1]
+            return v[:-3] if v.endswith('ull') else v
+        L = [f'# Runtime game profile of {g.id} ({g.get("name")}), written by dm/games/game.py profile from {g.dir}/game.tsv',
+             '# Read by the host from DM_PROFILE (hle_profile.c set_kv): KEY<TAB>VALUE, # starts a comment. Every value the compiled',
+             '# profile would hold is written, so the file alone describes the game.']
+        for key, macro in KEYS:
+            v = val(macro)
+            if v is not None: L.append(f'{key}\t{v}')
+        api = [val('NVN_API_MAJOR'), val('NVN_API_MINOR')]
+        if api[0] is not None: L.append(f'device_api\t{api[0]}.{api[1] or 0}')
+        for b, d in re.findall(r'\{"([0-9a-f]+)", "([^"]*)"\}', M.get('DM_GAME_DISPLAY_VERSIONS', '')):
+            L.append(f'display_version\t{b}\t{d}')
+        text = '\n'.join(L) + '\n'
+        if not (out.exists() and out.read_text() == text): out.write_text(text, encoding='utf-8')   # unchanged: keep the mtime
+        print(out)
+'''
+GAME_PY_TBC = r'''    tbc = g.get('tex_bc_cpu', 'off')   # decode BC-compressed textures on the CPU when the GPU has no BC support (A15/A16 and older; nvn_mtl.m uses nvn_bcdec.c): on / off
+    if tbc not in ('on', 'off'): sys.exit(f'{g.id}: tex_bc_cpu must be on or off: {tbc}')
+'''
+# dm/games/game.py: the tex_bc_cpu profile key (nvn_bcdec.c) and the `profile` subcommand that writes the runtime
+# profile (hle_profile.h). Fork-owned as a whole (OURS) until issue #92, which made the sync stop: upstream
+# changes this file too (tex_flush_upload ...), so the three additions are re-applied on top of its version.
+patch_game_py = anchored('dm/games/game.py', [
+    ('tex_bc_cpu check', "tbc = g.get('tex_bc_cpu'",
+     "    tds = g.get('tex_dyn_slots', 'off')", GAME_PY_TBC + "    tds = g.get('tex_dyn_slots', 'off')"),
+    ('tex_bc_cpu macro', 'DM_GAME_TEX_BC_CPU',
+     "         f'#define DM_GAME_TEX_DYN_SLOTS {int(tds == \"on\")}',\n",
+     "         f'#define DM_GAME_TEX_BC_CPU {int(tbc == \"on\")}',\n         f'#define DM_GAME_TEX_DYN_SLOTS {int(tds == \"on\")}',\n"),
+    ('profile subcommand', "a[0] == 'profile'",
+     "    elif len(a) == 2 and a[0] == 'dir':", GAME_PY_PROFILE + "    elif len(a) == 2 and a[0] == 'dir':"),
+])
+
+# Fork edits to vendored files that the sync replaces with upstream's version on purpose. The
+# unprotected-edit check (check_unprotected) accepts a file listed here.
+DROPPED = {
+    # data_blocks(img, text_end, md, lo=0): a leftover of the first form of the NRO fix (TEXT_LO); patch_nso.py's
+    # code_start()/code_ranges() replaced it and nothing passes `lo`, so upstream's data_blocks is the right one.
+    'dm/tools/nso_code.py': 'dead edit: the NRO bound lives in patch_nso.py (patch_patch_nso), nothing passes lo',
+    # CreateWithAdjustableSystemClock and the snapshot type bytes (PR #26) were OURS until issue #92; upstream has
+    # them since 4d2dc7db (#385, same function names, same behaviour), so the sync takes upstream's files again.
+    'dm/host/hle_time.c': 'the fork-only parts landed upstream as 4d2dc7db (#385)',
+    'dm/host/tests/t_time.c': 'the fork-only parts landed upstream as 4d2dc7db (#385)',
+}
+
+# The picked-location part of the fixture (the Files-app pick): the stub, argv[4], and the test.
+PICKED_EDITS = [
+    ('picked stub', 'fixture_picked;',
+     r"""'#define NSSearchPathForDirectoriesInDomains(a,b,c) @[fixture_doc]\n#define NSTemporaryDirectory() fixture_tmp\n' + locator +""",
+     r"""'#define NSSearchPathForDirectoriesInDomains(a,b,c) @[fixture_doc]\n#define NSTemporaryDirectory() fixture_tmp\n'
+                          # The picked-location bookmark (DataBookmark.m): the fixture answers it from a
+                          # variable, so a test can put the player's choice anywhere on disk.
+                          'static NSString *fixture_picked;\n'
+                          'NSString *dm_picked_data_path(BOOL *stale) { if (stale) *stale = NO; return fixture_picked; }\n' + locator +"""),
+    ('picked argv', 'if (argc > 4) fixture_picked',
+     r"""'fixture_doc = @(argv[1]); fixture_tmp = @(argv[2]); fixture_bundle = argc > 3 ? @(argv[3]) : @"/nonexistent-fixture"; NSString *p = romfs_locate();\n'""",
+     r"""'fixture_doc = @(argv[1]); fixture_tmp = @(argv[2]); fixture_bundle = argc > 3 ? @(argv[3]) : @"/nonexistent-fixture";\n'
+                          'if (argc > 4) fixture_picked = @(argv[4]);   // the location the player picked, when a test sets one\n'
+                          'NSString *p = romfs_locate();\n'"""),
+    ('picked test', 'test_the_location_the_player_picked', "\n\n\nif __name__ == '__main__': unittest.main()",
+     "\n\n" + TEST_PICKED_METHOD + "\n\n\nif __name__ == '__main__': unittest.main()"),
+]
+
 # One marker per carrier: the string that exists only when the fork's patch is in place.
 MARKERS = {
     'dm/host/hle_fs.c': 'romfsarc',
@@ -1181,9 +1664,8 @@ MARKERS = {
     'dm/host/tests/Makefile': 'romfs_arc.c',
     'dm/ios/tools/build_ipa.sh': 'DM_FULL_ROMFS',
     'scripts/build_ipa_from_nsp.py': '--work-dir',
-    'dm/gfx/tools/shader_split.py': "ue_inline_shaders(d, f'/{rel}#{label}', out)",
     'dm/ios/Sources/main.m': 'romfs_dir_ok',
-    'dm/gfx/nvn/nvn_mtl.m': 'if (on_sub_thread()) rec_publish();',
+    'dm/gfx/nvn/nvn_mtl.m': '../tex/nvn_bcdec.h',
     'dm/games/0100A00019DE0000/game.tsv': 'build	v1	1.0.137848',
     'dm/host/dm.h': 'hle_profile.h',
     'dm/host/front_mac.m': 'DM_KEYMAP',
@@ -1191,6 +1673,22 @@ MARKERS = {
     'dm/ios/tests/test_romfs_startup.py': 'fixture_profile',
     'dm/ios/tests/test_profile_pack.py': 'slim package',
     'docs/env_switches.tsv': 'DM_FULL_ROMFS\t',
+    'dm/mac/launcher.c': '.nx2apple-library',
+    'dm/host/hle_svc.c': 'dm_profile()->mem_reserve',
+    'dm/host/hle_os.c': 'dm_profile()->genv',
+    'dm/host/hle_fpslock.c': 'dm_profile()->fps_target',
+    'dm/host/loader.c': 'dm_profile()->fps_target',
+    'dm/ios/Sources/DmGamepad.m': 'dm_profile()->pad_layout',
+    'dm/ios/Sources/Launcher.swift': 'GameDataSection()',
+    'dm/ios/project.yml': 'SWIFT_OBJC_BRIDGING_HEADER',
+    'dm/ios/tests/test_xcode_workflow.py': "'check_glslang': None",
+    'dm/tools/env_switches.py': 'def verify_texts',
+    'dm/tools/tests/test_env_switches.py': 'test_verify_accepts_a_real_switch',
+    'dm/tools/impact_map.tsv': 'dm/host/input_map.h',
+    'dm/games/game.py': 'DM_GAME_TEX_BC_CPU',
+    'dm/games/0100F2C0115B6000/game.tsv': 'tex_bc_cpu\ton',
+    'docs/agents/README.md': 'A switch you recommend exists',
+    'docs/development.md': '`DM_KEYMAP=<name>=<key code>',
 }
 PATCHERS = {
     'dm/host/hle_fs.c': patch_hle_fs,
@@ -1198,7 +1696,6 @@ PATCHERS = {
     'dm/host/tests/Makefile': patch_tests_makefile,
     'dm/ios/tools/build_ipa.sh': patch_build_ipa,
     'scripts/build_ipa_from_nsp.py': patch_nsp,
-    'dm/gfx/tools/shader_split.py': patch_shader_split,
     'dm/ios/Sources/main.m': patch_main_m,
     'dm/gfx/nvn/nvn_mtl.m': patch_nvn_mtl,
     'dm/games/0100A00019DE0000/game.tsv': patch_hades2,
@@ -1208,6 +1705,22 @@ PATCHERS = {
     'dm/ios/tests/test_romfs_startup.py': patch_test_romfs_startup,
     'dm/ios/tests/test_profile_pack.py': patch_test_profile_pack,
     'docs/env_switches.tsv': patch_env_switches,
+    'dm/mac/launcher.c': patch_launcher_c,
+    'dm/host/hle_svc.c': patch_hle_svc,
+    'dm/host/hle_os.c': patch_hle_os,
+    'dm/host/hle_fpslock.c': patch_hle_fpslock,
+    'dm/host/loader.c': patch_loader,
+    'dm/ios/Sources/DmGamepad.m': patch_dmgamepad,
+    'dm/ios/Sources/Launcher.swift': patch_launcher_swift,
+    'dm/ios/project.yml': patch_project_yml,
+    'dm/ios/tests/test_xcode_workflow.py': patch_test_xcode_workflow,
+    'dm/tools/env_switches.py': patch_env_switches_py,
+    'dm/tools/tests/test_env_switches.py': patch_test_env_switches,
+    'dm/tools/impact_map.tsv': patch_impact_map,
+    'dm/games/game.py': patch_game_py,
+    'dm/games/0100F2C0115B6000/game.tsv': patch_hades_bc_profile,
+    'docs/agents/README.md': patch_docs_agents_readme,
+    'docs/development.md': patch_docs_development,
 }
 
 # PATCHED, MARKERS and PATCHERS are three views of one set and have to agree, or a carrier works
@@ -1245,7 +1758,7 @@ def take_from_upstream(rev, path, dest):
     # scripts lost their x bit (test_spirv_cross_pin: Permission denied running the committed spirv-cross)
     dest.chmod(0o755 if upstream_mode(rev, path) == '100755' else 0o644)
 
-def verify(skip_build):
+def verify(skip_build, upstream_ref='upstream/main'):
     say('--- verify ---')
     py = '/usr/bin/python3' if os.path.exists('/usr/bin/python3') else sys.executable
     bad = []
@@ -1293,10 +1806,10 @@ def verify(skip_build):
         tail = '\n'.join((r.stdout + r.stderr).splitlines()[-25:])
         fail(f'host unit tests failed:\n{tail}')
     else: say('  + host unit tests OK')
-    check_patcher_consistency()
+    check_patcher_consistency(upstream_ref)
 
 
-def check_patcher_consistency():
+def check_patcher_consistency(upstream_ref='upstream/main'):
     """Every carrier's patched form must equal the file in the tree, code line by code line.
 
     A fork change made to a carrier's source but not to its patcher entry is invisible today (the
@@ -1329,7 +1842,7 @@ def check_patcher_consistency():
         src = REPO / path
         if not src.exists():
             continue
-        upstream = subprocess.run(['git', 'show', f'upstream/main:{path}'], cwd=REPO,
+        upstream = subprocess.run(['git', 'show', f'{upstream_ref}:{path}'], cwd=REPO,
                                   capture_output=True, text=True)
         if upstream.returncode:
             continue                      # a fork-only file has no upstream form to compare
@@ -1349,6 +1862,38 @@ def check_patcher_consistency():
              'a future sync would silently revert the change')
     else:
         say(f'  + {len(PATCHERS)} patchers agree with the tree')
+
+def unprotected_edits(old, head='HEAD'):
+    """The fork's hand edits that nothing protects (issue #92): (edited, added) lists of vendored paths.
+
+    The sync takes upstream's version of a vendored file wherever upstream changed it, so a fork edit
+    survives only in an OURS file, a PATCHED carrier (its patcher re-applies it) or a DROPPED file (the
+    loss is deliberate). `edited` are files that exist in the last sync base `old` and differ in the
+    fork's tree `head` (or were deleted there) without any of the three; `added` are fork-only files
+    under the vendored paths that are not in OURS either (harmless until upstream adds the same path:
+    apply_changes would then overwrite the fork's file)."""
+    edited, added = [], []
+    for line in git('diff', '--name-status', '--no-renames', old, head, '--', *VENDORED).splitlines():
+        kind, path = line.split('\t')[0][0], line.split('\t')[-1]
+        if path in OURS or path in PATCHED or path in DROPPED: continue
+        (added if kind == 'A' else edited).append(path)
+    return sorted(edited), sorted(added)
+
+def check_unprotected(old, changes):
+    """Report fork edits the sync would lose. An edited file that upstream changes in this very sync is a
+    failure (its fork change is about to be overwritten); one that upstream leaves alone is only listed
+    (it survives this sync, and is lost at the first sync that touches it)."""
+    edited, added = unprotected_edits(old)
+    upstream = {p for _, p in changes}
+    lost = [p for p in edited if p in upstream]
+    for p in edited:
+        if p not in lost: say(f'  ! {p}: edited in the fork, not in OURS / PATCHED / DROPPED; upstream does not change it in this sync, but a later one will')
+    if added: say(f'  . {len(added)} fork-only file(s) under the vendored paths are not in OURS (harmless unless upstream adds the same path; --check-protection lists them)')
+    for p in lost:
+        say(f'  ! {p}: edited in the fork and changed by upstream in this sync, with no patcher')
+    if lost:
+        fail('fork edits that this sync would overwrite (add a patcher to PATCHERS, or OURS / DROPPED with the reason): ' + ', '.join(lost))
+    return edited, added
 
 def apply_changes(a, changes):
     """Take every changed file from upstream, then re-apply the fork's patches to the carriers."""
@@ -1612,16 +2157,27 @@ def refresh_badges():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--old', required=True, help='upstream ref the fork is currently at')
-    ap.add_argument('--new', required=True, help='upstream ref to sync to')
+    ap.add_argument('--new', help='upstream ref to sync to (not needed with --check-protection)')
     ap.add_argument('--skip-build', action='store_true')
+    ap.add_argument('--check-protection', action='store_true',
+                    help='only list the fork edits under the vendored paths that no patcher, OURS or DROPPED entry protects '
+                         '(files that differ from --old in the fork\'s tree); exit 1 when there are any')
     a = ap.parse_args()
+    if a.check_protection:
+        edited, added = unprotected_edits(a.old)
+        for p in edited: print(f'unprotected edit: {p}')
+        for p in added: print(f'fork-only file (not in OURS): {p}')
+        print(f'{len(edited)} unprotected edit(s), {len(added)} fork-only file(s) outside OURS')
+        sys.exit(1 if edited else 0)
+    if not a.new: ap.error('--new is required')
 
     say(f'sync {a.old[:7]} → {a.new[:7]}')
     changes = upstream_changes(a.old, a.new)
     say(f'{len(changes)} upstream file changes under {" ".join(VENDORED)}')
     try:
+        check_unprotected(a.old, changes)
         apply_changes(a, changes)
-        verify(a.skip_build)
+        verify(a.skip_build, a.new)   # the ref that was synced, whatever the remote is called here
         refresh_game_table()
         refresh_game_table_zh()
         refresh_badges()
