@@ -98,7 +98,7 @@ private struct GameDataSection: View {
             DocumentPicker { url in
                 picking = false
                 if dm_store_picked_data(url) {
-                    note = "Saved. The game uses this location from the next start."
+                    note = "Saved. The game uses this location when you press Play."
                     refresh()
                 } else {
                     note = "That location could not be remembered — try a different one."
