@@ -174,10 +174,20 @@ HLE_FORCE("_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci", "fsp-srv → open(2)", Re
     }
     int fd = open(hp, (mode & (MODE_WRITE | MODE_APPEND)) ? ((mode & MODE_READ) ? O_RDWR : O_WRONLY) : O_RDONLY);''')]))
     P.append(('ReadFile', 'romfsarc_pread(ah->shard', [(
-        '''    size_t got = 0; int reprep = 0;
+        '''    size_t got = 0; int reprep = 0, fd = (int)h; int64_t base = 0;
+    if (IMG_H(h)) {   // an image entry: read the image's descriptor at the entry's offset, never past its end
+        const img_ent *x = &g_mnt[IMG_M(h)].img->e[IMG_K(h)];
+        fd = g_mnt[IMG_M(h)].img->fd; base = (int64_t)x->a;
+        sz = off < 0 || (uint64_t)off >= x->b ? 0 : (size_t)(x->b - off) < sz ? (size_t)(x->b - off) : sz;
+    }
     dm_guest_write_prepare(buf, sz);   // The destination may be a texture pool page write-protected by the graphics layer: a kernel write to a read-only page returns EFAULT instead of page-faulting, so unprotect and mark dirty first
     while (got < sz) {''',
-        '''    size_t got = 0; int reprep = 0;
+        '''    size_t got = 0; int reprep = 0, fd = (int)h; int64_t base = 0;
+    if (IMG_H(h)) {   // an image entry: read the image's descriptor at the entry's offset, never past its end
+        const img_ent *x = &g_mnt[IMG_M(h)].img->e[IMG_K(h)];
+        fd = g_mnt[IMG_M(h)].img->fd; base = (int64_t)x->a;
+        sz = off < 0 || (uint64_t)off >= x->b ? 0 : (size_t)(x->b - off) < sz ? (size_t)(x->b - off) : sz;
+    }
     dm_guest_write_prepare(buf, sz);   // The destination may be a texture pool page write-protected by the graphics layer: a kernel write to a read-only page returns EFAULT instead of page-faulting, so unprotect and mark dirty first
     archandle *ah;
     if (arc_get(h, &ah)) {   // archive entry: clamp to the file, read from its shard
@@ -202,14 +212,18 @@ HLE_FORCE("_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci", "fsp-srv → open(2)", Re
     archandle *ah; if (arc_get(h, &ah)) { *out = (int64_t)ah->size; return RES_OK; }''')]))
     P.append(('CloseFile', 'arc_free(h)', [(
         '''HLE_FORCE("_ZN2nn2fs9CloseFileENS0_10FileHandleE", "fsp-srv → close(2)", void, h_fs_CloseFile, uint64_t h) {
-    if (!h) return;   // the null handle after a failed open (see ReadFile): do not touch fd 0''',
+    if (!h || IMG_H(h)) return;   // the null handle after a failed open (see ReadFile): do not touch fd 0; an image entry holds no descriptor''',
         '''HLE_FORCE("_ZN2nn2fs9CloseFileENS0_10FileHandleE", "fsp-srv → close(2)", void, h_fs_CloseFile, uint64_t h) {
-    if (!h) return;   // the null handle after a failed open (see ReadFile): do not touch fd 0
+    if (!h || IMG_H(h)) return;   // the null handle after a failed open (see ReadFile): do not touch fd 0; an image entry holds no descriptor
     if (h >> 63) { arc_free(h); return; }   // archive entry: nothing to close''')]))
     P.append(('GetEntryType', 'romfsarc_stat_file(rel', [(
         '''HLE_FORCE("_ZN2nn2fs12GetEntryTypeEPNS0_18DirectoryEntryTypeEPKc", "fsp-srv → stat(2)", Result, h_fs_GetEntryType, int32_t *out, const char *path) {
+    int mi; int64_t k;
+    if (img_path(path, &mi, &k)) { if (k < 0) return err_res("stat", path); *out = g_mnt[mi].img->e[k].type ? ENT_FILE : ENT_DIR; return RES_OK; }
     HP(path); struct stat st;''',
         '''HLE_FORCE("_ZN2nn2fs12GetEntryTypeEPNS0_18DirectoryEntryTypeEPKc", "fsp-srv → stat(2)", Result, h_fs_GetEntryType, int32_t *out, const char *path) {
+    int mi; int64_t k;
+    if (img_path(path, &mi, &k)) { if (k < 0) return err_res("stat", path); *out = g_mnt[mi].img->e[k].type ? ENT_FILE : ENT_DIR; return RES_OK; }
     HP(path); struct stat st;
     if (ROMFSARC_IS_SYNTH(hp)) {   // archive entry or directory, from the index
         const char *rel = arc_rel(hp);   // the index stores paths without a leading slash (abe35a3)
@@ -227,10 +241,9 @@ HLE_FORCE("_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci", "fsp-srv → open(2)", Re
         'return app == dm_profile()->program_id;')]))
     P.append(('snapshot helper', 'static void arc_snapshot', []))   # inserted below, needs dirh_t
     P.append(('OpenDirectory', 'arc_snapshot(ah, hp)', [(
-        '''HLE_FORCE("_ZN2nn2fs13OpenDirectoryEPNS0_15DirectoryHandleEPKci", "fsp-srv → opendir(3)", Result, h_fs_OpenDirectory, uint64_t *out, const char *path, int mode) {
-    HP(path); DIR *d = opendir(hp);''',
-        '''HLE_FORCE("_ZN2nn2fs13OpenDirectoryEPNS0_15DirectoryHandleEPKci", "fsp-srv → opendir(3)", Result, h_fs_OpenDirectory, uint64_t *out, const char *path, int mode) {
-    HP(path);
+        '''    HP(path); DIR *d = opendir(hp);
+    if (!d) return err_res("opendir", hp);''',
+        '''    HP(path);
     if (ROMFSARC_IS_SYNTH(hp)) {   // archive directory: no host DIR, only the snapshot
         if (!arc_dir(hp)) { errno = ENOTDIR; return err_res("opendir", hp); }
         dirh_t *ah = calloc(1, sizeof *ah); if (!ah) die("directory handle allocation failed");
@@ -238,7 +251,8 @@ HLE_FORCE("_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci", "fsp-srv → open(2)", Re
         arc_snapshot(ah, hp);
         *out = (uint64_t)ah; return RES_OK;
     }
-    DIR *d = opendir(hp);''')]))
+    DIR *d = opendir(hp);
+    if (!d) return err_res("opendir", hp);''')]))
     P.append(('ReadDirectory guard', "an archive directory that turned out empty", [(
         '''    int dfd = dirfd(h->d);''',
         '''    if (!h->d) { *count = 0; return RES_OK; }   // an archive directory that turned out empty (no snapshot, no host DIR)
