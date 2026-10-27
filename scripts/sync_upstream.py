@@ -337,15 +337,45 @@ def patch_tests_makefile(t):
                       '$(B)/t_touchpad_geometry: t_touchpad_geometry.c ../touchpad_geometry.h ../dm_input.h | $(B)\n'
                       '\tclang -O1 -Wall -I.. $(GINC) -o $@ t_touchpad_geometry.c\n' + rule_anchor, 1)
         done('tests/Makefile touchpad test')
-    # the prerequisites too, so a change to the reader rebuilds them
+    # the prerequisites too, so a change to the reader rebuilds them — and hle_profile.h, so a
+    # change to the runtime profile does
     for name in ('t_fs', 't_fs_commit_list', 't_fs_case'):
         dep_old = f'$(B)/{name}:'
         i = t.index(dep_old)
         j = t.index('\n', i)
         line = t[i:j]
         if '../romfs_arc.c' not in line:
-            t = t[:i] + line.replace(' ../hle.h', ' ../romfs_arc.c ../hle.h', 1) + t[j:]
-    return done('tests/Makefile romfs_arc.c', t)
+            line = line.replace(' ../hle.h', ' ../romfs_arc.c ../hle.h', 1)
+        if '../hle_profile.h' not in line:
+            line = line.replace(' | $(B)', ' ../hle_profile.c ../hle_profile.h | $(B)', 1)
+        t = t[:i] + line + t[j:]
+    # hle_profile.c: every test whose prerequisites reach a dm_profile() caller needs the accessor
+    # at link time (the runtime-profile merge added those calls; the sync replaces this file, so the
+    # rule has to live here or the host tests stop linking after every sync).
+    USERS = ('../hle_svc.c', '../hle_thread.c', '../hle_fs.c', '../loader.c',
+             '../hle_fpslock.c', '../hle_oe.c', '../hle_os.c', '../hle_sdk16.c')
+    lines = t.splitlines(keepends=True)
+    out, need = [], False
+    for ln in lines:
+        if ln.startswith('$(B)/'):
+            need = 'hle_profile.c' not in ln and any(u in ln for u in USERS)
+            out.append(ln); continue
+        if need and ln.startswith('\t') and ln.lstrip().startswith('clang') and 'hle_profile.c' not in ln:
+            ln = ln.rstrip('\n') + ' ../hle_profile.c\n'
+        elif not (ln.startswith('\t') or not ln.strip()):
+            need = False
+        out.append(ln)
+    t = ''.join(out)
+    # the memory block compiles ../hle_svc.c from MEM_DEPS
+    mem_old = 'MEM_DEPS = t_svc_memory.c memory_profile/game_profile.h ../hle_svc.c ../hle_guestthread.c ../hle.h ../dm.h'
+    if mem_old in t and 'hle_profile.c' not in t.split(mem_old)[1].split('\n')[0]:
+        t = t.replace(mem_old, mem_old + ' ../hle_profile.c ../hle_profile.h', 1)
+        for tail in ('t_svc_memory.c\n', 't_svc_memory.c ../../gfx/nvn/nvn_dirty.c\n'):
+            t = t.replace('\t' + 'clang $(MEM_FLAGS)', '\t' + 'clang $(MEM_FLAGS)')  # no-op guard
+        import re as _re
+        t = _re.sub(r'(\tclang \$\(MEM_FLAGS\)[^\n]*?\.c)(\n)',
+                    lambda m: m.group(1) + ' ../hle_profile.c' + m.group(2), t)
+    return done('tests/Makefile romfs_arc.c + hle_profile.c', t)
 
 ENT = '''# The unsigned IPA: an unsigned binary has no signature for a sideloader to read entitlements from,
 # so the request would be lost (AltStore reads the signature it replaces). Sign ad-hoc with the
