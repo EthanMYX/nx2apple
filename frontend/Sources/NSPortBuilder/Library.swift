@@ -244,7 +244,7 @@ final class GameLibrary: ObservableObject {
         let folder: String
     }
 
-    init(file: URL? = nil) {
+    init(file: URL? = nil, volumes: String = "/Volumes") {
         self.file = file ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("NS Port Builder/library.json")
         if FileManager.default.fileExists(atPath: self.file.path) {
@@ -257,22 +257,32 @@ final class GameLibrary: ObservableObject {
             }
             catch { self.error = error.localizedDescription }
         }
-        pruneMissingPaths()
+        pruneMissingPaths(volumes: volumes)
         selectedID = games.first?.id
     }
 
-    /// Forgets a remembered Mac app, IPA or iOS app that is gone from disk, so nothing points at it. Saves only when something changed;
-    /// run on load and after a scan, never from a view.
-    func pruneMissingPaths() {
+    /// A path on an external volume (`/Volumes/<name>/...`) whose mount point is absent: the drive is not connected, so the file is
+    /// not known to be gone and its path must stay.
+    static func onUnmountedVolume(_ path: String, volumes: String = "/Volumes") -> Bool {
+        let prefix = volumes.hasSuffix("/") ? volumes : volumes + "/"
+        guard path.hasPrefix(prefix), let name = path.dropFirst(prefix.count).split(separator: "/").first else { return false }
+        return !FileManager.default.fileExists(atPath: prefix + name)
+    }
+
+    /// Forgets a remembered Mac app, IPA or iOS app that is gone from disk, so nothing points at it. A file on a drive that is not
+    /// connected is kept (the game is just not ready until the drive is back); one missing from a mounted volume is cleared. Saves only
+    /// when something changed; run on load and after a scan, never from a view.
+    func pruneMissingPaths(volumes: String = "/Volumes") {
         let fm = FileManager.default
+        func gone(_ path: String, plist: Bool = false) -> Bool {
+            !path.isEmpty && !Self.onUnmountedVolume(path, volumes: volumes) && !fm.fileExists(atPath: plist ? path + "/Info.plist" : path)
+        }
         var changed = false
         for index in games.indices {
             let game = games[index]
-            if !game.appPath.isEmpty && !fm.fileExists(atPath: game.appPath) { games[index].appPath = ""; changed = true }
-            if !game.ipaPath.isEmpty && !fm.fileExists(atPath: game.ipaPath) { games[index].ipaPath = ""; changed = true }
-            if !game.iosAppPath.isEmpty && !fm.fileExists(atPath: game.iosAppPath + "/Info.plist") {
-                games[index].iosAppPath = ""; games[index].installedDevice = ""; changed = true
-            }
+            if gone(game.appPath) { games[index].appPath = ""; changed = true }
+            if gone(game.ipaPath) { games[index].ipaPath = ""; changed = true }
+            if gone(game.iosAppPath, plist: true) { games[index].iosAppPath = ""; games[index].installedDevice = ""; changed = true }
         }
         if changed { save() }
     }

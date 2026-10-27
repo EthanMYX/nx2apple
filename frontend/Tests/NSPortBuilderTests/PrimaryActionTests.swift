@@ -83,6 +83,29 @@ final class PrimaryActionTests: XCTestCase {
         XCTAssertEqual(again.games.count, 2)
     }
 
+    func testPathsOnAnUnmountedVolumeStayAndMissingFilesOnAMountedOneAreCleared() throws {
+        let volumes = temporary.appendingPathComponent("Volumes")
+        try FileManager.default.createDirectory(at: volumes.appendingPathComponent("NX"), withIntermediateDirectories: true)   // mounted
+        var away = LibraryGame(titleID: titleID, name: "Away", appPath: volumes.path + "/Unplugged/Games/Hades.app",
+                               ipaPath: volumes.path + "/Unplugged/Hades.ipa", iosAppPath: volumes.path + "/Unplugged/ios/Hades.app")
+        away.installedDevice = "UDID"
+        let deleted = LibraryGame(titleID: "0100000000010000", name: "Deleted", appPath: volumes.path + "/NX/Games/Gone.app",
+                                  ipaPath: volumes.path + "/NX/Gone.ipa")
+        let file = temporary.appendingPathComponent("library.json")
+        try JSONEncoder().encode([away, deleted]).write(to: file)
+        let library = GameLibrary(file: file, volumes: volumes.path)   // the load prunes, against this fake /Volumes
+        let a = try XCTUnwrap(library.games.first { $0.name == "Away" }), d = try XCTUnwrap(library.games.first { $0.name == "Deleted" })
+        XCTAssertEqual(a.appPath, volumes.path + "/Unplugged/Games/Hades.app", "the drive is not connected: nothing is forgotten")
+        XCTAssertEqual(a.ipaPath, volumes.path + "/Unplugged/Hades.ipa")
+        XCTAssertEqual(a.iosAppPath, volumes.path + "/Unplugged/ios/Hades.app")
+        XCTAssertEqual(a.installedDevice, "UDID")
+        XCTAssertFalse(a.isReady)
+        XCTAssertEqual([d.appPath, d.ipaPath], ["", ""], "the volume is mounted and the files (and their folder) are gone")
+        XCTAssertTrue(GameLibrary.onUnmountedVolume(volumes.path + "/Unplugged/x", volumes: volumes.path))
+        XCTAssertFalse(GameLibrary.onUnmountedVolume(volumes.path + "/NX/x", volumes: volumes.path))
+        XCTAssertFalse(GameLibrary.onUnmountedVolume("/Users/someone/x.app"))
+    }
+
     func testPruneAfterAppIsDeletedWhileRunning() throws {
         let app = try makeApp()
         let library = GameLibrary(file: temporary.appendingPathComponent("library.json"))
