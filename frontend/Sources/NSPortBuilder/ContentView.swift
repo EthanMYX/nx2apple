@@ -1068,6 +1068,21 @@ final class BuildModel: ObservableObject {
     }
 
     /// The stamped (version, count, bytes) versus the source tree's now: nil = pack again.
+    /// The newest version folder the extraction wrote, or nil when it wrote none.
+    ///
+    /// Either shape counts: RomFS/ from the older tools, RomFS.img from the current ones (the
+    /// rewriter packs the game files itself — build_ipa_from_nsp.py:876 tests for the image).
+    /// Looking only for the folder made every 0.4.8 build report "archive skipped" after a
+    /// successful extraction (issue #73).
+    nonisolated static func extractedVersion(in extract: String) -> String? {
+        let fm = FileManager.default
+        return ((try? fm.contentsOfDirectory(atPath: extract)) ?? [])
+            .filter { $0.hasPrefix("v") && (fm.fileExists(atPath: extract + "/" + $0 + "/RomFS") ||
+                                            fm.fileExists(atPath: extract + "/" + $0 + "/RomFS.img")) }
+            .sorted { (Int($0.dropFirst()) ?? 0) < (Int($1.dropFirst()) ?? 0) }
+            .last
+    }
+
     nonisolated static func archiveReusable(source: String, version: String, stamp: String) -> Int? {
         guard let s = treeStats(source) else { return nil }
         let parts = stamp.split(separator: "\t")
@@ -1291,8 +1306,7 @@ final class BuildModel: ObservableObject {
         // only for the folder made every 0.4.8 build end with "archive skipped" on a machine where
         // the extraction had in fact succeeded (issue #73).
         let vers = ((try? fm.contentsOfDirectory(atPath: extract)) ?? [])
-            .filter { $0.hasPrefix("v") && (fm.fileExists(atPath: extract + "/" + $0 + "/RomFS") ||
-                                            fm.fileExists(atPath: extract + "/" + $0 + "/RomFS.img")) }
+            .filter { $0.hasPrefix("v") && fm.fileExists(atPath: extract + "/" + $0 + "/RomFS") }
             .sorted { (Int($0.dropFirst()) ?? 0) < (Int($1.dropFirst()) ?? 0) }
         guard let v = vers.last else {
             stages.append(Stage(id: 1000, name: t("prog.archiveShort"), state: .failed, detail: t("prog.noRomfs")))

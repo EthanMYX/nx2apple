@@ -830,27 +830,21 @@ final class LibraryTests: XCTestCase {
 
     /// Issue #73: the extraction writes RomFS.img now, not a RomFS folder. The archive step looked
     /// only for the folder, so every build ended with "archive skipped" after a successful build.
+    /// This drives BuildModel.extractedVersion — the function the archive step calls — rather than
+    /// restating its predicate, so changing the production code changes what this checks.
     func testTheExtractionIsFoundAsEitherAFolderOrAnImage() throws {
         let work = FileManager.default.temporaryDirectory.appendingPathComponent("nspb-extract-" + UUID().uuidString)
         let extract = work.appendingPathComponent("extract")
         defer { try? FileManager.default.removeItem(at: work) }
-        func found() -> String? {
-            // the same predicate BuildModel.packArchive uses
-            let fm = FileManager.default
-            let versions = ((try? fm.contentsOfDirectory(atPath: extract.path)) ?? [])
-                .filter { $0.hasPrefix("v") && (fm.fileExists(atPath: extract.appendingPathComponent($0).appendingPathComponent("RomFS").path) ||
-                                                fm.fileExists(atPath: extract.appendingPathComponent($0).appendingPathComponent("RomFS.img").path)) }
-                .sorted { (Int($0.dropFirst()) ?? 0) < (Int($1.dropFirst()) ?? 0) }
-            return versions.last
-        }
         try FileManager.default.createDirectory(at: extract.appendingPathComponent("v0"), withIntermediateDirectories: true)
-        XCTAssertNil(found(), "an empty version folder holds neither shape")
+        XCTAssertNil(BuildModel.extractedVersion(in: extract.path), "an empty version folder holds neither shape")
         // what the rewriter writes today
-        try Data([0x44, 0x4d, 0x52, 0x4f, 0x4d, 0x46, 0x53, 0x31]).write(to: extract.appendingPathComponent("v0").appendingPathComponent("RomFS.img"))
-        XCTAssertEqual(found(), "v0", "RomFS.img alone must count")
-        // (verification: with the folder-only predicate this next line would already have failed)
-        // and the older shape still works
-        try FileManager.default.createDirectory(at: extract.appendingPathComponent("v1").appendingPathComponent("RomFS"), withIntermediateDirectories: true)
-        XCTAssertEqual(found(), "v1", "the highest version wins")
+        try Data([0x44, 0x4d, 0x52, 0x4f, 0x4d, 0x46, 0x53, 0x31])
+            .write(to: extract.appendingPathComponent("v0").appendingPathComponent("RomFS.img"))
+        XCTAssertEqual(BuildModel.extractedVersion(in: extract.path), "v0", "RomFS.img alone must count")
+        // and the older shape still works, with the highest version winning
+        try FileManager.default.createDirectory(at: extract.appendingPathComponent("v1").appendingPathComponent("RomFS"),
+                                                withIntermediateDirectories: true)
+        XCTAssertEqual(BuildModel.extractedVersion(in: extract.path), "v1")
     }
 }
