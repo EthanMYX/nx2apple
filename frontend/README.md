@@ -16,9 +16,18 @@ writes them as PNG (from a copy of your library, with example paths), and
 ## Build game
 
 1. Select **Build game** and choose the folder containing one game's files, or
-   pick the base game and `prod.keys` separately.
+   pick the base game and `prod.keys` separately. Dropping NSP, NSZ or XCI files,
+   a folder or `prod.keys` onto the page does the same: they are sorted into base
+   game, update and DLC by the title ID in their names, as a chosen folder is.
 2. Add an update or DLC under **Updates & add-on content** when needed.
 3. Choose **This Mac** or **iPhone / iPad**, then **Build game**.
+
+As soon as the base game and `prod.keys` are chosen, the line under `prod.keys` says
+whether the keys open the game files: it decrypts the NCA headers of the NSP or NSZ
+(base game, update, DLC) with `header_key` and checks that the keys of each one's key
+generation are in the file, so keys that are too old for an update show up before the
+build, not in its extraction step. An XCI cannot be checked this way and says so. No
+key value is shown or logged.
 
 Setup lives under **Settings**: the games folder, the repository and its updates,
 the dependency checks and installers, and app updates. Missing setup is linked
@@ -28,9 +37,24 @@ time left; the build log opens under it. **Stop** ends the script and every tool
 it started (the build runs in a process group of its own), and so does quitting
 the app.
 
+**Settings → Copy diagnostics** puts a short Markdown report on the clipboard, for a
+bug report: the app and macOS versions and the chip; the repository, its commit and
+branch and how far it is behind `upstream/main` and `origin/main` as of the last fetch
+(nothing is fetched); the Python and .NET the builds run with and the dependency
+check; this session's last build command and the last 50 lines of its log. The home
+folder is shown as `~`, a log line holding key material (`name = <hex>`, as in
+`prod.keys`) keeps only its name, and no environment variables are included.
+
 A completed Mac build appears in the collection automatically and can be started
 with **Play**. An iPhone build, by default, offers its unsigned IPA and the
 sideloading and RomFS-copy instructions.
+
+When a build finishes or fails while the app is in the background, a notification
+names the game and the target; clicking it shows the game in the library, or the
+Builds page with the log for a failed build. macOS asks for permission when the
+first build starts, and **Settings → App** turns it off. Notifications need the
+app bundle: started with `swift run` the launcher has no bundle identifier, and
+there are none.
 
 ## Install on an iPhone or iPad
 
@@ -55,6 +79,24 @@ profile expires after seven days. **Don't install, export the IPA** keeps the
 unsigned IPA as before. The devices and teams are read with `devicectl list
 devices` and `security find-identity`; the team is the certificate's
 organizational unit, not the code in its name.
+
+## Saves
+
+**Manage > Saves…** (a controller's Y) shows a game's save on this Mac
+(where `dm/mac/launcher.c` puts it: `<library folder>/save/<title ID>` beside the app when
+its folder holds `games/`, else `~/Library/Application Support/nxnative/<title ID>/save`;
+until the app has copied an older `~/Library` save across, that one is shown) and
+on the device the launcher installed it on (`Documents/games/<title ID>/save` in the app's
+data container, from `dm/ios/Sources/main.m`), each with the date of its newest file, and
+marks the newer one. **Mac → iPhone** and **iPhone → Mac** copy one over the other, after
+asking. The save being replaced is backed up first, beside the Mac save in
+`<save>-backups/<date> mac` or `<date> device` (the device's is copied to the Mac before
+anything is replaced). A game that also keeps device save data has a `<save>_device`
+folder beside it (`dm/host/hle_fs.c`), which goes along. The copy is refused while
+the game runs on the Mac; close it on the device too, or it writes its own save over the
+copy later. The device side uses the install's route: `devicectl device info files` for
+the date and `devicectl device copy from` / `copy to` with the app's data container. Only
+a game installed from here has a known bundle ID, so a sideloaded IPA has no device side.
 
 ## Your games folder
 
@@ -134,6 +176,26 @@ installed and no resource bundle beside the executable.
 
 The app icon is drawn by `make_icon.swift`; `./make_icon.sh` writes `icon.iconset/`
 and `AppIcon.icns` from it.
+
+## App updates
+
+When the app opens it asks GitHub for the latest release. With **Install updates
+automatically** on (Settings → App, the default), a newer release is downloaded in
+the background and staged: the zip's SHA-256 must match the `digest` GitHub gives
+for the asset (a release without one is not installed automatically), and the app
+inside must carry this app's bundle identifier, an executable and the release's
+version. The staged copy replaces the app when you quit it, so the next launch is
+the new version; **Restart now** in Settings and in the library's bottom line
+installs it at once. Neither runs while a build does: the swap ends with a relaunch,
+which would end the build's process group. If you quit during a build, the build is
+stopped as before and the update waits for a later quit. With the switch off,
+**Update to vX** in Settings downloads, verifies and relaunches as before (a
+release without a digest is still accepted there; a wrong digest never is).
+
+A launcher built from this repository never replaces itself: `swift run` (no
+bundle), a bundle under `.build/` or `DerivedData/`, a bundle beside
+`Package.swift` (the `NX2Apple.app` made here), or one whose Info.plist version
+is not this binary's release number. `AppUpdate.swift` holds these rules.
 
 ## Run
 

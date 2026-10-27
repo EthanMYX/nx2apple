@@ -12,7 +12,7 @@ struct UpdateSheet: View {
     @ObservedObject var m: BuildModel
     @Environment(\.dismiss) private var dismiss
 
-    private var update: (tag: String, url: String, notes: String)? { m.appUpdate }
+    private var update: AppUpdate.Release? { m.appUpdate }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -52,10 +52,13 @@ struct UpdateSheet: View {
                     .buttonStyle(LauncherSecondaryButtonStyle())
                     .keyboardShortcut(.cancelAction)
                 Button {
-                    m.performAppUpdate()
+                    // Automatic mode has already downloaded and staged the release, so the action is
+                    // to swap it in now; otherwise this downloads, verifies and installs as before.
+                    if m.appStaged != nil { m.installStagedUpdate(relaunch: true) } else { m.performAppUpdate() }
                     dismiss()
                 } label: {
-                    Text(m.t("update.now")).font(.manrope(13.5, .bold)).foregroundStyle(.black)
+                    Text(m.t(m.appStaged != nil ? "app.restartNow" : "update.now"))
+                        .font(.manrope(13.5, .bold)).foregroundStyle(.black)
                         .padding(.horizontal, 20).padding(.vertical, 9)
                         .background(LauncherPalette.cream, in: Capsule())
                 }

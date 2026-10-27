@@ -733,6 +733,28 @@ def rmtree(p):
     if sys.platform == 'darwin' and subprocess.run(['sysctl', '-n', 'sysctl.proc_translated'], capture_output=True, text=True).stdout.strip() == '1':
         raise BuildError(f'{sys.executable} is an Intel Python running under Rosetta; run the build with a native arm64 Python (e.g. /usr/bin/python3 or Homebrew in /opt/homebrew)')
 """)]))
+    # glslangValidator is only needed by an OpenGL game, and build_gl_shaders already checks for it —
+    # but by then the extraction and the capture have run for minutes, and the check raises before
+    # layer_shaders creates gl_shaders.log, so the failure had no log to read (issue #71). Checked
+    # next to check_metal, which is in the same place for the same reason.
+    P.append(('GL shader tool check', 'check_glslang(env)', [(
+        "    if gfx == 'nvn': check_metal(py, repo, env)   # before the captures and the shader split, which take minutes\n",
+        "    if gfx == 'nvn': check_metal(py, repo, env)   # before the captures and the shader split, which take minutes\n"
+        "    if gfx == 'gl': check_glslang(env)\n"), (
+        # the function itself, beside check_metal
+        """    raise BuildError(msg.replace('set DM_ALLOW_OTHER_METAL=1 (the NSP script\\'s --allow-other-metal)', 'ALLOW_OTHER_METAL = True (--allow-other-metal)'))
+""",
+        """    raise BuildError(msg.replace('set DM_ALLOW_OTHER_METAL=1 (the NSP script\\'s --allow-other-metal)', 'ALLOW_OTHER_METAL = True (--allow-other-metal)'))
+
+
+def check_glslang(env):
+    \"\"\"An OpenGL game's GLSL goes through glslangValidator; build_gl_shaders checks for it, but only
+    after the extraction and the runtime capture have run for minutes, and it raises before
+    layer_shaders creates gl_shaders.log — so the GUI showed a failure with no log to read (issue
+    #71). Checked before those steps, as check_metal is and for the same reason.\"\"\"
+    if not shutil.which('glslangValidator', path=env['PATH']):
+        raise BuildError("glslangValidator is not installed: an OpenGL game's GLSL shaders need it to compile to SPIR-V (brew install glslang)")
+""")]))
     for name, marker, pairs in P:
         if marker in t:
             skip(f'NSP script {name} (already patched)'); continue
@@ -871,6 +893,22 @@ static NSString *game_dir_for(const char *title_id) {
 static NSString *romfs_locate(void) {
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
+    // What the player picked in the Files app wins over everything: it is the one path they chose
+    // on purpose, possibly on an external drive, and it costs nothing when they never picked one
+    // (the bookmark is absent and this falls straight through). An image or a folder both work,
+    // and a pick that no longer holds this game's data falls through rather than failing the boot.
+    {
+        BOOL stale = NO;
+        NSString *picked = dm_picked_data_path(&stale);
+        if (stale) fprintf(stderr, "boot: the picked game-data location needs to be chosen again (the app is signed differently now)\\n");
+        if (picked.length) {
+            if (romfs_image_complete(picked)) { fprintf(stderr, "boot: game data from the picked image %s\\n", picked.UTF8String); return picked; }
+            NSString *pimg = [picked stringByAppendingPathComponent:@"romfs.img"];
+            if (romfs_image_complete(pimg)) { fprintf(stderr, "boot: game data from the picked folder %s\\n", pimg.UTF8String); return pimg; }
+            if (romfs_dir_ok(picked)) { fprintf(stderr, "boot: game data from the picked folder %s\\n", picked.UTF8String); return picked; }
+            fprintf(stderr, "boot: the picked location %s holds no game data for this title; using the app's own\\n", picked.UTF8String);
+        }
+    }
     // Per-game first: Documents/games/<id>/romfs.img (one file, what push_romfs.sh sends) or
     // Documents/games/<id>/romfs/ — the launcher-style layout, and what lets a user keep several
     // games\' data side by side or on an external drive. The marker check inside romfs_dir_ok is
@@ -924,6 +962,9 @@ def patch_main_m(t):
         ('runtime profile include',
          ('#include "game_profile.h"   // game profile constants (the RomFS marker path)',
           '#include "hle_profile.h"   // the runtime game profile (DM_PROFILE): the RomFS marker path comes from it')),
+        # the Files-app pick (DataBookmark.m): romfs_locate asks it before anything else
+        ('picked data include',
+         ('#include "romfs_image.h"\n', '#include "romfs_image.h"\n#include "DataBookmark.h"\n')),
         ('romfs per-game', MAIN_M_ROMFS),
         ('per-game data dirs', MAIN_M_ENV),
     ]
