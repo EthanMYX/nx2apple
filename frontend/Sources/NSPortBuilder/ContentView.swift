@@ -483,6 +483,13 @@ final class BuildModel: ObservableObject {
         branch.trimmingCharacters(in: .whitespacesAndNewlines) == "main" && status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// The local branch that keeps a ZIP copy as it was when it is connected to git.
+    nonisolated static func zipCopyBranch(date: Date = Date()) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"
+        return "zip-copy-" + f.string(from: date)
+    }
+
     /// What the launch does with the configured repository when it is a copy without .git (#87: a ZIP copy never updated
     /// itself, so its build tools were older than the app).
     enum ZipAdoption: Equatable { case notNeeded, adopt, waitsForBuild, autoUpdateOff }
@@ -509,8 +516,12 @@ final class BuildModel: ObservableObject {
     }
 
     /// A ZIP copy has no .git: adopt it into git in place (init, remote, fetch, checkout) so the
-    /// update buttons work and the folder keeps its path. A ZIP copy carries no local changes, and
-    /// the checkout resets it to origin/main — the build's own files live outside the repository.
+    /// update buttons work and the folder keeps its path. The copy may hold the player's own edits (a tweaked game
+    /// profile), and the checkout resets every tracked file to origin/main, so the copy is recorded first: after the
+    /// fetch, the files of the copy that origin/main also has are committed on the local branch `zip-copy-<date>`
+    /// (fixed local author, no git identity needed). Only those paths: a build folder or any other file that origin/main
+    /// does not track is never committed (and the checkout leaves such files where they are). The build's own files live
+    /// outside the repository.
     /// `automatic`: the launch-time adoption (adoptAtLaunch); `remote` is GitHub unless a test points it at a local repository.
     func adoptRepoAsGit(automatic: Bool = false, remote: String = BuildModel.repoURL) {
         guard !running, !repoBusy, repoOK, !repoIsGit, let git = Self.gitBinary() else { return }
@@ -518,12 +529,26 @@ final class BuildModel: ObservableObject {
         let dir = repoPath
         DispatchQueue.global().async {
             var out = "", ok = true
-            for args in [["init"], ["remote", "add", "origin", remote],
-                         ["fetch", "--depth", "1", "origin", "main"],
-                         ["checkout", "-f", "-B", "main", "origin/main"]] {
+            let branch = Self.zipCopyBranch()
+            func run(_ args: [String]) -> (ok: Bool, out: String) {
                 let r = Self.runQuiet([git, "-C", dir] + args, env: Self.gitEnv())
                 out += "$ git \(args.joined(separator: " "))\n\(r.out)\n"
-                if !r.ok { ok = false; break }
+                return r
+            }
+            // Nothing in the folder changes before the fetch has worked, so an offline failure leaves the copy as it was.
+            ok = run(["init"]).ok && run(["remote", "add", "origin", remote]).ok && run(["fetch", "--depth", "1", "origin", "main"]).ok
+            if ok {
+                let tree = run(["ls-tree", "-r", "-z", "--name-only", "origin/main"])
+                let present = tree.out.split(separator: "\0").map(String.init).filter { FileManager.default.fileExists(atPath: dir + "/" + $0) }
+                let list = NSTemporaryDirectory() + "nspb-zip-paths-\(UUID().uuidString.prefix(8)).txt"
+                defer { try? FileManager.default.removeItem(atPath: list) }
+                let identity = ["-c", "user.name=NX2Apple", "-c", "user.email=nx2apple@localhost", "-c", "commit.gpgsign=false"]
+                ok = tree.ok
+                    && run(["symbolic-ref", "HEAD", "refs/heads/" + branch]).ok
+                    && ((try? Data(present.joined(separator: "\0").utf8).write(to: URL(fileURLWithPath: list))) != nil)
+                    && run(["add", "--pathspec-from-file=" + list, "--pathspec-file-nul"]).ok
+                    && run(identity + ["commit", "--allow-empty", "-m", "The ZIP copy as it was before it was connected to git"]).ok
+                    && run(["checkout", "-f", "-B", "main", "origin/main"]).ok
             }
             if ok { _ = Self.runQuiet([git, "-C", dir, "branch", "--set-upstream-to=origin/main", "main"], env: Self.gitEnv()) }   // checkout -B usually set it
             // A failed adoption (offline) must not leave the .git that `git init` made: the copy would count as a
@@ -536,8 +561,8 @@ final class BuildModel: ObservableObject {
                 if ok && self.repoIsGit {
                     // the checkout is origin/main as just fetched: up to date, nothing left to pull
                     self.repoBehind = 0
-                    if automatic { self.autoAdopted = true; self.repoStatus = self.t("repo.adoptedAuto") }
-                    else { self.repoStatus = self.t("repo.adopted"); self.checkRepoUpdates() }
+                    self.repoStatus = String(format: self.t(automatic ? "repo.adoptedAuto" : "repo.adopted"), branch)
+                    if automatic { self.autoAdopted = true }
                 } else {
                     self.repoStatus = self.t(automatic ? "repo.adoptFailAuto" : "repo.adoptFail")
                 }

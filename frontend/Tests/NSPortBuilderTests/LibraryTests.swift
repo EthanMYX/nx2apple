@@ -706,7 +706,7 @@ final class LibraryTests: XCTestCase {
             model.autoUpdateRepo = false
             try capture("settings-zip-auto-off", page: .settings)
             model.autoUpdateRepo = true
-            model.repoStatus = model.t("repo.adoptedAuto")
+            model.repoStatus = String(format: model.t("repo.adoptedAuto"), "zip-copy-2026-10-27")
             model.autoAdopted = true
             try capture("library-adopted")
             model.autoAdopted = false

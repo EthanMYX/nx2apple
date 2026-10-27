@@ -110,10 +110,28 @@ final class RepoToolsTests: XCTestCase {
         let m = openZip(f, auto: true)
         XCTAssertTrue(m.repoIsGit)
         XCTAssertTrue(m.autoAdopted)
-        XCTAssertEqual(m.repoStatus, m.t("repo.adoptedAuto"))
+        XCTAssertEqual(m.repoStatus, String(format: m.t("repo.adoptedAuto"), BuildModel.zipCopyBranch()))
         XCTAssertEqual(BuildModel.missingTools(in: f.zip.path), [], "the tools of origin/main are there now")
         XCTAssertEqual(try git("rev-parse", "--abbrev-ref", "HEAD", in: f.zip), "main")
         XCTAssertEqual(try String(contentsOf: f.zip.appendingPathComponent(BuildModel.buildScript), encoding: .utf8), "new")
+    }
+
+    @MainActor func testTheCopyIsKeptOnABranchBeforeTheCheckoutOverwritesIt() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/git") else { throw XCTSkip("git is required for the fixture") }
+        let f = try fixture()
+        try "my tweak".write(to: f.zip.appendingPathComponent(BuildModel.buildScript), atomically: true, encoding: .utf8)   // an edited tracked file
+        try write(["dm/mine/notes.txt"], in: f.zip, text: "mine")                                       // a file origin does not have
+        try write(["dm/tools/build/huge.bin"], in: f.zip, text: "build output")
+        let m = openZip(f, auto: true)
+        let branch = BuildModel.zipCopyBranch()
+        XCTAssertEqual(try git("show", "main:" + BuildModel.buildScript, in: f.zip), "new", "main has origin's version")
+        XCTAssertEqual(try String(contentsOf: f.zip.appendingPathComponent(BuildModel.buildScript), encoding: .utf8), "new")
+        XCTAssertEqual(try git("show", branch + ":" + BuildModel.buildScript, in: f.zip), "my tweak", "the branch has the edit")
+        XCTAssertEqual(try git("ls-tree", "-r", "--name-only", branch, in: f.zip).split(separator: "\n").map(String.init).sorted(),
+                       ["dm/tools/nx_extract/Program.cs", BuildModel.buildScript].sorted(), "only paths origin tracks are recorded")
+        XCTAssertEqual(try git("log", "-1", "--format=%an", branch, in: f.zip), "NX2Apple")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: f.zip.appendingPathComponent("dm/mine/notes.txt").path), "untracked files stay where they are")
+        XCTAssertTrue(m.repoStatus.contains(branch), m.repoStatus)
     }
 
     @MainActor func testWithTheAutomaticUpdateOffTheZipCopyIsLeftAlone() throws {
@@ -133,5 +151,7 @@ final class RepoToolsTests: XCTestCase {
         XCTAssertEqual(m.repoStatus, m.t("repo.adoptFailAuto"))
         XCTAssertFalse(m.autoAdopted)
         XCTAssertTrue(BuildModel.isRepo(f.zip.path), "the files are still there")
+        XCTAssertEqual(try String(contentsOf: f.zip.appendingPathComponent(BuildModel.buildScript), encoding: .utf8), "old", "nothing was changed")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: f.zip.appendingPathComponent(".git").path))
     }
 }
