@@ -664,7 +664,11 @@ final class BuildModel: ObservableObject {
             fail(repoPath.isEmpty ? t("msg.repoInvalidEmpty") : String(format: t("msg.repoInvalid"), shortPath(repoPath)))
             return
         }
-        let py = pythonPath.isEmpty ? "/usr/bin/python3" : pythonPath
+        // Resolve the interpreter here if the dependency check has not landed yet. checkDeps()
+        // runs on a background queue and startBuild() can beat it — for a moment pythonPath is
+        // empty, and the old fallback was Apple's /usr/bin/python3 (3.9), which the script then
+        // rejected with "require Python 3.12 or newer" whatever the machine actually had (#53).
+        let py = pythonPath.isEmpty ? Self.findPython().path : pythonPath
 
         // One folder when everything lives together; otherwise a staging folder of symlinks. A folder
         // that holds other games too (a ROMs folder with one file per game) is staged as well: the
@@ -1396,7 +1400,12 @@ final class BuildModel: ObservableObject {
     /// The minimum the build scripts need. /usr/bin/python3 is 3.9 on a stock Mac and has none of
     /// the packages; picking it made a build fail with a syntax error deep inside the script
     /// (an f-string only 3.12 can parse) instead of a clear message here.
-    nonisolated static let minPython = (3, 9)
+    ///
+    /// 3.12 is the script's own floor, not a guess: build_ipa_from_nsp.py:1911 raises "Direct
+    /// RomFS image builds require Python 3.12 or newer". This said 3.9 — the comment above even
+    /// said 3.12 — so findPython() was happy to return Apple's 3.9 and the build then died inside
+    /// the script with a message the user could not act on (issue #53).
+    nonisolated static let minPython = (3, 12)
 
     /// The interpreter probe: lz4 / capstone / fontTools always, and zstd from either source —
     /// `compression.zstd` is built in from Python 3.14 and `backports.zstd` (which declares

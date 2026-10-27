@@ -798,4 +798,19 @@ final class LibraryTests: XCTestCase {
         XCTAssertEqual(BuildModel.titleID("/ROMs/TotK [01007EF00011E000].xci"), 0x01007EF00011E000)
         XCTAssertNil(BuildModel.titleID("no title id here.nsp"))
     }
+
+    /// Issue #53: the interpreter floor is the script's own, so Apple's 3.9 is never picked.
+    func testThePythonFloorIsTheScriptsOwnThreeTwelve() {
+        XCTAssertEqual(BuildModel.minPython.0, 3)
+        XCTAssertEqual(BuildModel.minPython.1, 12,
+                       "build_ipa_from_nsp.py:1911 refuses anything below 3.12; a lower floor let the "
+                       + "app pick /usr/bin/python3 and the build died in the script")
+        let (path, _) = BuildModel.findPython()
+        XCTAssertFalse(path.isEmpty, "a Mac with any usable interpreter must yield one")
+        if let v = BuildModel.pythonVersion(path) {
+            let floor = BuildModel.minPython
+            XCTAssertTrue(v.0 > floor.0 || (v.0 == floor.0 && v.1 >= floor.1),
+                          "picked \(path) at \(v.0).\(v.1), below the \(floor.0).\(floor.1) floor")
+        }
+    }
 }
