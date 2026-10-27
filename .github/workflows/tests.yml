@@ -120,6 +120,27 @@ jobs:
           path: logs
           retention-days: 7
 
+  sync-patchers:
+    name: Sync patchers against seedds main (issue #92)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+      # The patchers of scripts/sync_upstream.py are run on the files of seedds/nxnative main (the remote the fork syncs from) and of the last sync base
+      # (.upstream-ref): one that no longer fits, or whose marker upstream's own text satisfies, fails here before a sync stops or drops fork code silently.
+      - name: Fetch seedds main and the last sync base
+        run: |
+          git remote add seedds https://github.com/seedds/nxnative.git
+          git fetch --no-tags --depth=1 seedds main
+          git fetch --no-tags --depth=1 seedds "$(cat .upstream-ref)"
+      - name: Patcher tests
+        run: python -m unittest -v scripts/tests/test_sync_patchers.py
+
   build:
     name: Build check (Mac host, gfx tests, iOS sources)
     runs-on: macos-26
