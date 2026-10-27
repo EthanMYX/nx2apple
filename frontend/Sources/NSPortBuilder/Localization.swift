@@ -188,6 +188,7 @@ enum L10n {
         "app.checking": ("正在检查 App 更新…", "Checking for a new app version…"),
         "app.upToDate": ("App 已是最新版本", "The app is up to date"),
         "app.found": ("App 有新版本 %@，点右上角按钮更新", "A new version %@ is out — update from the top-right button"),
+        "app.noAsset": ("发现新版本 %@，但这个版本找不到对应的安装包——请到发布页手动下载", "Version %@ is out, but this build cannot find its own download in it — get it from the release page"),
         "app.updateBtn": ("更新到 %@", "Update to %@"),
         "update.title": ("有新版本可用", "A new version is out"),
         "update.fromTo": ("当前 %@ → 新版本 %@", "You have %@ — the new version is %@"),

@@ -485,6 +485,12 @@ final class BuildModel: ObservableObject {
     @Published var showUpdateSheet = false
     @Published var appStatus = ""
 
+    /// The download names this build accepts, newest first. Every release must carry at least one of
+    /// them or an install from that era cannot update itself: NX2Apple is current, nxnative is for
+    /// installs from before the rename to NX2Apple, NS-Port-Builder for installs before that.
+    nonisolated static let appAssetNames = ["NX2Apple-macOS-arm64.zip", "nxnative-macOS-arm64.zip",
+                                           "NS-Port-Builder-macOS-arm64.zip"]
+
     nonisolated static func isNewer(_ tag: String, than current: String) -> Bool {
         func nums(_ s: String) -> [Int] { s.split(separator: ".").map { Int($0.filter { $0.isNumber }) ?? 0 } }
         let a = nums(tag), b = nums(current)
@@ -503,15 +509,22 @@ final class BuildModel: ObservableObject {
         if !silent { appStatus = t("app.checking") }
         URLSession.shared.dataTask(with: URL(string: "https://api.github.com/repos/LNPANDY/NX2Apple/releases/latest")!) { data, _, _ in
             var found: (String, String, String)?
+            // A newer release whose download this build cannot name is NOT "up to date". That
+            // distinction is the difference between a user who updates and one who sits on 0.4.6
+            // for ever: 0.4.6 and 0.4.7 look for exactly "NS-Port-Builder-macOS-arm64.zip", and if a
+            // release ever ships without that name they report "已是最新" and stop. Keep the name and
+            // report the mismatch honestly.
+            var newerTag: String?
             if let d = data, let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
                 let tag = obj["tag_name"] as? String ?? ""
-                if Self.isNewer(tag, than: Self.appVersion),
-                   let assets = obj["assets"] as? [[String: Any]] {
-                    // nxnative-macOS-arm64.zip; releases from before the rename name it NS-Port-Builder-macOS-arm64.zip
-                    let notes = (obj["body"] as? String) ?? ""
-                    for name in ["NX2Apple-macOS-arm64.zip", "nxnative-macOS-arm64.zip", "NS-Port-Builder-macOS-arm64.zip"] where found == nil {
-                        for a in assets where (a["name"] as? String) == name {
-                            if let u = a["browser_download_url"] as? String { found = (tag, u, notes) }
+                if Self.isNewer(tag, than: Self.appVersion) {
+                    newerTag = tag
+                    if let assets = obj["assets"] as? [[String: Any]] {
+                        let notes = (obj["body"] as? String) ?? ""
+                        for name in Self.appAssetNames where found == nil {
+                            for a in assets where (a["name"] as? String) == name {
+                                if let u = a["browser_download_url"] as? String { found = (tag, u, notes) }
+                            }
                         }
                     }
                 }
@@ -523,7 +536,15 @@ final class BuildModel: ObservableObject {
                     self.appStatus = String(format: self.t("app.found"), f.0)
                     self.showUpdateSheet = true      // the sheet names what the new version does
                 } else if !silent {
-                    self.appStatus = data == nil ? self.t("app.netFail") : self.t("app.upToDate")
+                    if data == nil {
+                        self.appStatus = self.t("app.netFail")
+                    } else if let tag = newerTag {
+                        // The release exists; this app just cannot find its own asset name in it.
+                        self.appStatus = String(format: self.t("app.noAsset"), tag)
+                        self.appUpdate = nil
+                    } else {
+                        self.appStatus = self.t("app.upToDate")
+                    }
                 }
             }
         }.resume()
