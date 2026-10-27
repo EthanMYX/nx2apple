@@ -1817,6 +1817,7 @@ struct BuilderView: View {
         files.disabled(m.running)
         target
         if m.target != "mac-app" { install.disabled(m.running) }
+        logPanel
         action
         outcome
         progress
@@ -2029,10 +2030,17 @@ struct BuilderView: View {
                 if m.stages.isEmpty && m.running {
                     row(m.t("library.preparing")) { ProgressView().controlSize(.small) }
                 }
-                divider
-                disclosure(m.t("build.log"), isOpen: logOpen) { logOpen.toggle() }
-                if logOpen { logView.padding(.horizontal, 14).padding(.bottom, 14) }
             }
+        }
+    }
+
+    /// The build log, right under the Mac / iPhone choice and folded away until it is asked for.
+    /// It used to sit at the bottom of the progress card, which is where a failed build's message
+    /// pointed ("see the log below") while the log itself was out of view on a short window (#52).
+    @ViewBuilder private var logPanel: some View {
+        group(m.t("section.log")) {
+            disclosure(m.t("build.log"), isOpen: logOpen) { logOpen.toggle() }
+            if logOpen { logView.padding(.horizontal, 14).padding(.bottom, 14) }
         }
     }
 

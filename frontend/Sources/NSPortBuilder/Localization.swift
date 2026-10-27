@@ -92,6 +92,7 @@ enum L10n {
         "build.saveTo": ("\u{4fdd}\u{5b58}\u{5230}", "Save to"),
         "build.saveDefault": ("\u{6e38}\u{620f}\u{6587}\u{4ef6}\u{65c1}\u{8fb9}", "Next to the game files"),
         "build.log": ("\u{6784}\u{5efa}\u{65e5}\u{5fd7}", "Build log"),
+        "section.log": ("\u{6784}\u{5efa}\u{65e5}\u{5fd7}", "Log"),
         "library.folderUnset": ("\u{5c1a}\u{672a}\u{8bbe}\u{7f6e}", "Not set"),
         "app.version": ("\u{7248}\u{672c} %@", "Version %@"),
         "library.scrollBack": ("\u{5411}\u{524d}\u{6eda}\u{52a8}", "Scroll back"),
