@@ -171,9 +171,14 @@ MAPS=()
 # DM_FULL_ROMFS=1 packs the game files into the package (upstream behaviour; only sensible for small
 # games — a full package of a large game is many GB and iOS refuses to install it with
 # PackageExtractionFailed). The default is the slim package: the app reads them from
-# Documents/games/<id>/ (romfs.img, or a ROMFSARC archive: romfs.idx + romfs.NN shards).
+# Documents/games/<id>/ (romfs.img and aoc/<index>.img), which the launcher copies in one go and
+# which can also live on an external drive.
 if [ -n "${DM_FULL_ROMFS:-}" ]; then if [ -f "$ROMFS" ]; then MAPS=("$P/romfs.img=$ROMFS"); else MAPS=("$P/romfs=$ROMFS"); fi; fi
-if [ -n "$AOC" ] && [ -d "$AOC" ]; then MAPS+=("$P/aoc=$AOC"); t "add-on content: $(ls "$AOC" | tr '\n' ' ')"; fi
+if [ -n "${DM_FULL_ROMFS:-}" ] && [ -n "$AOC" ] && [ -d "$AOC" ]; then
+  MAPS+=("$P/aoc=$AOC"); t "add-on content packed into the IPA: $(ls "$AOC" | tr '\n' ' ')"
+elif [ -n "$AOC" ] && [ -d "$AOC" ]; then
+  t "add-on content alongside the game data (DM_FULL_ROMFS=1 packs it): $(ls "$AOC" | tr '\n' ' ')"
+fi
 if [ -n "${PSO:-}" ]; then MAPS+=("$P/pso=$PSO"); fi
 MAPS+=("$P/msl/$MSLDIR=$MSL_IOS/$MSLDIR" "$P=$APP")
 if [ -n "${DM_FULL_ROMFS:-}" ]; then

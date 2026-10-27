@@ -1011,7 +1011,11 @@ final class BuildModel: ObservableObject {
         // side by side in one app.
         let gamesRoot = (outDir.isEmpty ? (basePath as NSString).deletingLastPathComponent : outDir) + "/games"
         let tid = Self.titleID(basePath).map { String(format: "%016llX", $0) } ?? "game"
-        let dest = gamesRoot + "/" + tid + "/romfs"
+        // games/<id>/ holds romfs.img and aoc/ side by side: main.m's per-game lookup takes the
+        // image, and the host mounts DLC from aoc/<index>.img (hle_fs.c aoc_dir). One folder, which
+        // the user copies to the phone or keeps on an external drive as a whole.
+        let gameDir = gamesRoot + "/" + tid
+        let dest = gameDir
         try? fm.createDirectory(atPath: dest, withIntermediateDirectories: true)
         // Reuse: packing is a multi-GB write, and the extracted RomFS is itself reused by the
         // script — so when the source tree's (version, file count, bytes) matches the stamp left
@@ -1029,10 +1033,13 @@ final class BuildModel: ObservableObject {
             finishBuild(ok: true, note: t("msg.done"))
             return
         }
-        // a previous pack's shards must not survive a smaller new pack (the index names its own
-        // shards, but stale higher-numbered files would sit there confusingly)
+        // One romfs.img instead of a ROMFSARC shard set: upstream reads the image directly
+        // (hle_fs.c), one file copies to a phone at full speed where 300,000 did not, and it fits
+        // an external drive. A shard set from an earlier build of this game is removed first —
+        // main.m takes Documents/games/<id>/romfs.img before romfs/, so a stale archive would sit
+        // there confusingly.
         for old in ((try? fm.contentsOfDirectory(atPath: dest)) ?? [])
-        where old == "romfs.idx" || (old.hasPrefix("romfs.") && old.dropFirst(6).allSatisfy(\.isNumber)) {
+        where old == "romfs.img" || old == "romfs.idx" || (old.hasPrefix("romfs.") && old.dropFirst(6).allSatisfy(\.isNumber)) {
             try? fm.removeItem(atPath: dest + "/" + old)
         }
         let idx = 1000
@@ -1041,9 +1048,8 @@ final class BuildModel: ObservableObject {
 
         let p = Process()
         p.executableURL = URL(fileURLWithPath: pythonPath.isEmpty ? "/usr/bin/python3" : pythonPath)
-        // base = dest + "/romfs": the pack writes romfs.idx + romfs.NN INSIDE the folder
-        // (base = dest would leave them as siblings of an empty folder)
-        p.arguments = [repoPath + "/dm/tools/romfs_arc.py", "pack", romfs, dest + "/romfs", "--shard-mib", "200"]
+        // dest/romfs.img: one file, which main.m's per-game lookup takes before any folder.
+        p.arguments = [repoPath + "/dm/tools/romfs_image.py", "--reuse", romfs, dest + "/romfs.img"]
         p.environment = ["PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "PYTHONPATH": repoPath + "/dm/tools"]
         Self.inOwnGroup(p, python: p.executableURL!.path)
         let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
@@ -1061,6 +1067,17 @@ final class BuildModel: ObservableObject {
             if succeeded {
                 self.archivePath = dest
                 Self.writeStamp(source: romfs, version: v, to: dest + "/.packstamp")
+                // The DLC images ride along: with the slim default the build script leaves them in
+                // the work folder instead of packing them into the IPA, and the host mounts them
+                // from DM_AOC_DIR/<index>.img — so they belong in this game's folder.
+                let aocSrc = workDir + "/aoc"
+                let aocDst = dest + "/aoc"
+                if fm.fileExists(atPath: aocSrc) {
+                    try? fm.removeItem(atPath: aocDst)
+                    try? fm.copyItem(atPath: aocSrc, toPath: aocDst)
+                    let n = ((try? fm.contentsOfDirectory(atPath: aocDst)) ?? []).count
+                    if n > 0 { self.say(String(format: self.t("msg.aocCopied"), n)) }
+                }
             }
             if let i = self.stages.firstIndex(where: { $0.id == idx }) {
                 self.stages[i].state = succeeded ? .done : .failed

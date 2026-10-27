@@ -1078,13 +1078,15 @@ class Model(QObject):
             self.finished.emit(True, self.t('msg.archiveSkipped', str(extract)))
             return
         romfs = str(versions[-1][1] / 'RomFS')
+        # games/<id>/ is the per-game layout main.m looks in first, and the file inside it is
+        # romfs.img — one file, which copies to a phone at full speed where 300,000 did not
         dest = str(Path(self.out_dir or Path(self.base_path).parent, 'romfs'))
         self.stages.append(Stage(name=self.t('prog.archiveShort'), state='running'))
         self.stagesChanged.emit()
 
         def work_() -> None:
-            args = [self.python_path, str(Path(self.repo_path, 'dm', 'tools', 'romfs_arc.py')),
-                    'pack', romfs, str(Path(dest, 'romfs')), '--shard-mib', '200']
+            args = [self.python_path, str(Path(self.repo_path, 'dm', 'tools', 'romfs_image.py')),
+                    '--reuse', romfs, str(Path(dest, 'romfs.img'))]
             env = pu.child_env({'PYTHONPATH': str(Path(self.repo_path, 'dm', 'tools'))})
             ok = True
             try:

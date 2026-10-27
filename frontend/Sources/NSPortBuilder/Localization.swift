@@ -339,8 +339,9 @@ enum L10n {
         "prog.title": ("构建进度", "Build progress"),
         "prog.empty": ("开始构建后，这里显示脚本自己的每个阶段",
                        "The script's own stages appear here once the build starts"),
-        "prog.archive": ("RomFS 归档分片（200 MiB/片）", "RomFS archive shards (200 MiB each)"),
-        "prog.archiveShort": ("RomFS 归档分片", "RomFS archive shards"),
+        "msg.aocCopied": ("附加内容（%d 个 DLC）已放进游戏文件夹的 aoc/", "add-on content (%d DLC) placed in the game folder's aoc/"),
+        "prog.archive": ("打包游戏数据为 romfs.img（单文件）", "Pack game data as one romfs.img"),
+        "prog.archiveShort": ("游戏数据镜像", "Game data image"),
         "prog.noRomfs": ("找不到解出的 RomFS", "no extracted RomFS found"),
 
         // ---- log ----
@@ -392,8 +393,8 @@ enum L10n {
         "msg.archiveNoStart": ("无法启动 romfs_arc.py", "Could not start romfs_arc.py"),
         "msg.archiveIpaOnly": ("IPA 已生成，归档失败", "IPA built, but the archive failed"),
         "msg.done": ("完成：IPA 与 romfs 归档已生成，按下面三步装到手机", "Done: the IPA and the romfs archive are ready — three steps below"),
-        "prog.archiveDone": ("归档就绪：%@", "archive ready: %@"),
-        "prog.archiveReused": ("复用上次归档（%d 个文件未变）", "reused the previous archive (%d files unchanged)"),
+        "prog.archiveDone": ("游戏数据就绪：%@/romfs.img", "game data ready: %@/romfs.img"),
+        "prog.archiveReused": ("复用上次的镜像（%d 个文件未变）", "reused the previous image (%d files unchanged)"),
         "msg.archiveReused": ("归档未变，复用 %@", "archive unchanged, reusing %@"),
         "msg.archiveLog": ("归档：%@ → %@", "Archive: %@ → %@"),
     ]

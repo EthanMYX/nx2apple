@@ -424,8 +424,19 @@ def patch_build_ipa(t):
 # DM_FULL_ROMFS=1 packs the game files into the package (upstream behaviour; only sensible for small
 # games — a full package of a large game is many GB and iOS refuses to install it with
 # PackageExtractionFailed). The default is the slim package: the app reads them from
-# Documents/games/<id>/ (romfs.img, or a ROMFSARC archive: romfs.idx + romfs.NN shards).
+# Documents/games/<id>/ (romfs.img and aoc/<index>.img), which the launcher copies in one go and
+# which can also live on an external drive.
 if [ -n "${DM_FULL_ROMFS:-}" ]; then if [ -f "$ROMFS" ]; then MAPS=("$P/romfs.img=$ROMFS"); else MAPS=("$P/romfs=$ROMFS"); fi; fi''', 1)
+        # Add-on content follows the same rule: with the slim default it goes to
+        # Documents/games/<id>/aoc/<index>.img (the host already mounts *.img there, hle_fs.c
+        # aoc_dir), so the IPA stays small and the game data is one folder the user copies.
+        old_aoc = '''if [ -n "$AOC" ] && [ -d "$AOC" ]; then MAPS+=("$P/aoc=$AOC"); t "add-on content: $(ls "$AOC" | tr '\\n' ' ')"; fi'''
+        if old_aoc in t and 'if [ -n "${DM_FULL_ROMFS:-}" ] && [ -n "$AOC" ]' not in t:
+            t = t.replace(old_aoc, '''if [ -n "${DM_FULL_ROMFS:-}" ] && [ -n "$AOC" ] && [ -d "$AOC" ]; then
+  MAPS+=("$P/aoc=$AOC"); t "add-on content packed into the IPA: $(ls "$AOC" | tr '\\n' ' ')"
+elif [ -n "$AOC" ] && [ -d "$AOC" ]; then
+  t "add-on content alongside the game data (DM_FULL_ROMFS=1 packs it): $(ls "$AOC" | tr '\\n' ' ')"
+fi''', 1)
         old3 = '''t "pack IPA (already-compressed game files stored, everything else deflated)"'''
         if old3 not in t: fail('dm/ios/tools/build_ipa.sh: pack line missing after the MAPS assignment')
         t = t.replace(old3, '''if [ -n "${DM_FULL_ROMFS:-}" ]; then
