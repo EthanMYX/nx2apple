@@ -124,10 +124,38 @@ enum AppUpdate {
     /// launch shows no Gatekeeper prompt (the release is ad-hoc signed, not notarized).
     ///
     /// Refused while a build runs: the caller relaunches (or the app is quitting), and either ends the build's process group.
-    static func install(_ staged: URL, over current: URL, buildRunning: Bool, trashOld: Bool = true) throws {
+    /// Where the staged release goes: its own bundle name when it differs from the running copy's,
+    /// else the current URL.
+    ///
+    /// The two-name case is a rename era (nxnative → NS Port Builder → NX2Apple). Replacing in place
+    /// would keep the old folder's name for ever: the app inside is the new version, but the
+    /// Finder, the Dock and /Applications keep saying the old name, which read as "the update did
+    /// not happen" (a 0.4.6 install updated to 0.4.8 and still saw NS Port Builder). Under the new
+    /// name the old bundle is removed; the Dock entry pointing at it goes stale once, which a log
+    /// line names — the alternative was the old name for ever.
+    static func installTarget(for staged: URL, current: URL) -> URL {
+        staged.lastPathComponent == current.lastPathComponent
+            ? current
+            : current.deletingLastPathComponent().appendingPathComponent(staged.lastPathComponent)
+    }
+
+    /// Install the staged app and return where it ended up (the caller relaunches that path).
+    static func install(_ staged: URL, over current: URL, buildRunning: Bool, trashOld: Bool = true) throws -> URL {
         guard !buildRunning else { throw InstallError.buildRunning }
         let fm = FileManager.default
         let dir = current.deletingLastPathComponent()
+        let target = installTarget(for: staged, current: current)
+        if target != current {
+            // A rename: place the staged bundle under its own name, then retire the old-named one.
+            // The running copy is trashed last — on macOS a running executable survives the removal
+            // of its bundle (the kernel holds the vnode), and the quit-time path runs this as the
+            // app is exiting anyway.
+            try? fm.removeItem(at: target)
+            try fm.copyItem(at: staged, to: target)
+            clearQuarantine(target)
+            if trashOld { try? fm.trashItem(at: current, resultingItemURL: nil) }
+            return target
+        }
         let name = current.deletingPathExtension().lastPathComponent
         let incoming = dir.appendingPathComponent(name + " (new).app")
         let backupName = name + " (old).app"
@@ -140,13 +168,18 @@ enum AppUpdate {
             if fm.fileExists(atPath: backup.path) {
                 if trashOld { try? fm.trashItem(at: backup, resultingItemURL: nil) } else { try? fm.removeItem(at: backup) }
             }
-            let x = Process()
-            x.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
-            x.arguments = ["-dr", "com.apple.quarantine", (placed ?? current).path]
-            try? x.run(); x.waitUntilExit()
+            clearQuarantine(placed ?? current)
+            return current
         } catch {
             try? fm.removeItem(at: incoming)
             throw InstallError.failed(error.localizedDescription)
         }
+    }
+
+    private static func clearQuarantine(_ app: URL) {
+        let x = Process()
+        x.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+        x.arguments = ["-dr", "com.apple.quarantine", app.path]
+        try? x.run(); x.waitUntilExit()
     }
 }

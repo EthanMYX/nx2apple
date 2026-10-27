@@ -501,6 +501,9 @@ final class BuildModel: ObservableObject {
     }
     /// The release that is downloaded, verified and unpacked: it goes in when the app quits, or with Restart now.
     @Published var appStaged: AppUpdate.Staged?
+    /// Where a rename-era install put the new app (the old bundle name is gone): Settings shows it,
+    /// because the Dock entry pointing at the old path is stale until the player re-pins it.
+    static var noteRenamedInstall: String?
     /// Whether this copy may replace itself; a launcher built from the repository never does (tests set it).
     var appInstallability = AppUpdate.installability(Bundle.main.bundleURL, appVersion: BuildModel.appVersion)
     private var quitObserver: NSObjectProtocol?
@@ -677,8 +680,9 @@ final class BuildModel: ObservableObject {
     @discardableResult
     func installStagedUpdate(relaunch: Bool, at current: URL = Bundle.main.bundleURL) -> Bool {
         guard let staged = appStaged, appInstallability == .ok else { return false }
+        let placed: URL
         do {
-            try AppUpdate.install(staged.app, over: current, buildRunning: !mayInstallAppUpdate)
+            placed = try AppUpdate.install(staged.app, over: current, buildRunning: !mayInstallAppUpdate)
         } catch AppUpdate.InstallError.failed(let why) {
             appStatus = String(format: t("app.installFail"), why)
             return false
@@ -687,9 +691,17 @@ final class BuildModel: ObservableObject {
             return false
         }
         appStaged = nil
+        // A rename era (nxnative → NS Port Builder → NX2Apple) installs under the release's own
+        // bundle name; the Dock entry pointing at the old path goes stale once, so the log says
+        // where the new copy landed instead of leaving the player to find it.
+        if placed != current {
+            fputs("launcher: the update was installed as \(placed.lastPathComponent) (the app was renamed); "
+                + "the previous \(current.lastPathComponent) was removed — re-pin it in the Dock\n", stderr)
+            Self.noteRenamedInstall = placed.path
+        }
         if relaunch {
             appStatus = String(format: t("app.relaunching"), staged.release.tag)
-            NSWorkspace.shared.openApplication(at: current, configuration: NSWorkspace.OpenConfiguration())
+            NSWorkspace.shared.openApplication(at: placed, configuration: NSWorkspace.OpenConfiguration())
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { exit(0) }
         }
         return true

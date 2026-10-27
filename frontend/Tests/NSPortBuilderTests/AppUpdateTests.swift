@@ -167,13 +167,46 @@ final class AppUpdateTests: XCTestCase {
 
     // ---- when ----
 
-    func testInstallSwapsTheBundle() throws {
-        let current = try makeApp("Current", in: temporary.appendingPathComponent("Applications"), marker: "old")
-        let staged = try makeApp("Staged", in: temporary.appendingPathComponent("staged"), marker: "new")
-        try AppUpdate.install(staged, over: current, buildRunning: false, trashOld: false)
+    func testInstallSwapsTheBundleInPlaceWhenTheNameMatches() throws {
+        let dir = temporary.appendingPathComponent("Applications")
+        let current = try makeApp("Current", in: dir, marker: "old")
+        let staged = try makeApp("Current", in: temporary.appendingPathComponent("staged"), marker: "new")
+        let placed = try AppUpdate.install(staged, over: current, buildRunning: false, trashOld: false)
+        XCTAssertEqual(placed, current, "a same-name install stays where it was")
         XCTAssertEqual(try marker(current), "new")
-        let left = try FileManager.default.contentsOfDirectory(atPath: current.deletingLastPathComponent().path)
-        XCTAssertEqual(left, ["Current.app"])   // no "(new)" or "(old)" copy beside it
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path), ["Current.app"])   // no "(new)"/"(old)" copy beside it
+    }
+
+    func testInstallUsesTheStagedNameWhenItDiffers() throws {
+        // The rename era: nxnative → NS Port Builder → NX2Apple. In-place replacement kept the old
+        // folder's name for ever, and an updated app still called itself the old name.
+        let dir = temporary.appendingPathComponent("Applications")
+        let current = try makeApp("Current", in: dir, marker: "old")
+        let staged = try makeApp("Renamed", in: temporary.appendingPathComponent("staged"), marker: "new")
+        let placed = try AppUpdate.install(staged, over: current, buildRunning: false, trashOld: false)
+        XCTAssertEqual(placed.standardizedFileURL.path, dir.appendingPathComponent("Renamed.app").path)
+        XCTAssertEqual(try marker(placed), "new", "the new bundle is the staged one, under its own name")
+        XCTAssertEqual(try marker(current), "old", "with trashOld off the old copy is left alone (the running app in the real flow)")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted(), ["Current.app", "Renamed.app"])
+    }
+
+    func testInstallWithTheStagedNameRemovesTheOldBundle() throws {
+        let dir = temporary.appendingPathComponent("Applications")
+        let current = try makeApp("Current", in: dir, marker: "old")
+        let staged = try makeApp("Renamed", in: temporary.appendingPathComponent("staged"), marker: "new")
+        _ = try AppUpdate.install(staged, over: current, buildRunning: false, trashOld: true)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path), ["Renamed.app"],
+                       "the old-named bundle is retired once the new one is in place")
+    }
+
+    func testTheInstallTargetFollowsTheStagedNameOnlyWhenItDiffers() {
+        let dir = URL(fileURLWithPath: "/Applications")
+        XCTAssertEqual(AppUpdate.installTarget(for: dir.appendingPathComponent("NX2Apple.app"),
+                                               current: dir.appendingPathComponent("NX2Apple.app")),
+                       dir.appendingPathComponent("NX2Apple.app"))
+        XCTAssertEqual(AppUpdate.installTarget(for: dir.appendingPathComponent("NX2Apple.app"),
+                                               current: dir.appendingPathComponent("NS Port Builder.app")),
+                       dir.appendingPathComponent("NX2Apple.app"), "a rename installs under the release's own name")
     }
 
     func testInstallRefusedWhileBuildRuns() throws {
