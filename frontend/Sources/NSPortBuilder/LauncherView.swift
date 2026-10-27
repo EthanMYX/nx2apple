@@ -37,6 +37,7 @@ struct ContentView: View {
     @State private var freeSpaceFor: UUID?   // the game whose Free space sheet is open
     @State private var controlsOpen = false
     @State private var savesFor: UUID?   // the game whose Saves sheet is open (SaveTransfer.swift)
+    @State private var manageOpenFor: UUID?   // the game whose Manage menu is open (ManageMenu.swift)
     @StateObject private var controls = ControlLayout()
     @StateObject private var gamepad = LauncherGamepad()
     @StateObject private var padFocus = PadFocus()
@@ -44,10 +45,13 @@ struct ContentView: View {
     @StateObject private var toolsAge: ToolsAge
     @State private var buildCommit = ""   // the checkout's commit when the running build started (ToolsAge)
     private var performStartupChecks: Bool
+    private let qaManage: (open: Bool, ring: Bool)   // visual QA: the Manage menu open at launch, with the controller's focus ring or without
     @Environment(\.scenePhase) private var scenePhase
 
     init(model: BuildModel? = nil, library: GameLibrary? = nil, initialPage: LauncherPage = .library,
-         activeBuildID: UUID? = nil, performStartupChecks: Bool = true, search: String? = nil, olderTools: Set<UUID> = []) {
+         activeBuildID: UUID? = nil, performStartupChecks: Bool = true, search: String? = nil, olderTools: Set<UUID> = [],
+         manageOpen: Bool = false, padRing: Bool = false) {
+        qaManage = (manageOpen, padRing)
         if let search { _search = State(initialValue: search); _searching = State(initialValue: true) }   // visual QA: the bar with its field open
         _toolsAge = StateObject(wrappedValue: ToolsAge(older: olderTools))   // visual QA: games marked without a checkout to compare
         _m = StateObject(wrappedValue: model ?? BuildModel())
@@ -77,6 +81,14 @@ struct ContentView: View {
         }
         .padScope("main", padFocus)
         .environmentObject(padFocus)
+        .manageMenuOverlay(items: manageOpenFor.flatMap { id in library.games.first { $0.id == id } }.map(manageItems),
+                           label: m.t("library.manage"), pad: padFocus) { manageOpenFor = nil }
+        .onChange(of: manageOpenFor) { id in
+            padFocus.scope = id != nil ? "manage" : currentPadScope
+            if id != nil, padFocus.visible {   // opened by the controller: its focus lands on the first usable row
+                DispatchQueue.main.async { padFocus.show(default: ManagePad.firstFocus(manageItems(for: library.selected))) }
+            }
+        }
         .background(LauncherPalette.background)
         .background(LauncherWindowChrome())
         .ignoresSafeArea(.container, edges: .top)
@@ -86,6 +98,10 @@ struct ContentView: View {
         .frame(minWidth: 900, idealWidth: 1280, minHeight: 680, idealHeight: 900)
         .onAppear {
             gamepad.perform = padAction
+            if qaManage.open {
+                if qaManage.ring { padFocus.show(default: nil) }
+                manageOpenFor = library.selected?.id
+            }
             refreshArtwork()
             if performStartupChecks { library.discover(); fetchArtwork(); m.refreshDevices(); checkTools() }
             if performStartupChecks {
@@ -152,12 +168,12 @@ struct ContentView: View {
         .sheet(isPresented: Binding(get: { freeSpaceFor != nil }, set: { if !$0 { freeSpaceFor = nil } })) {
             if let game = library.games.first(where: { $0.id == freeSpaceFor }) { FreeSpaceView(m: m, game: game).environmentObject(padFocus) }
         }
-        .onChange(of: freeSpaceFor) { id in padFocus.scope = id != nil ? "free" : "main" }
+        .onChange(of: freeSpaceFor) { id in padFocus.scope = id != nil ? "free" : currentPadScope }
         .sheet(isPresented: $m.showUpdateSheet) { UpdateSheet(m: m) }
         .sheet(isPresented: Binding(get: { savesFor != nil }, set: { if !$0 { savesFor = nil } })) {
             if let id = savesFor { SavesView(m: m, library: library, gameID: id).environmentObject(padFocus) }
         }
-        .onChange(of: savesFor) { id in padFocus.scope = id != nil ? "saves" : "main" }
+        .onChange(of: savesFor) { id in padFocus.scope = id != nil ? "saves" : currentPadScope }
         .onChange(of: optionsFor) { id in padFocus.scope = id != nil ? "launch" : (controlsOpen ? "controls" : "main") }
         .onChange(of: controlsOpen) { open in padFocus.scope = open ? "controls" : (optionsFor != nil ? "launch" : "main") }
         .onChange(of: page) { _ in padFocus.focused = nil }
@@ -354,29 +370,10 @@ struct ContentView: View {
                         .buttonStyle(.plain).help(m.t("launch.title")).accessibilityLabel(m.t("launch.title"))
                         .padTarget("hero.options", scope: "main", radius: 24) { optionsFor = game.id }
                     }
-                    Menu {
-                        Button(m.t(toolsAge.older.contains(game.id) ? "library.rebuild" : "library.buildAgain")) { configureBuild(game) }.disabled(m.running || game.inputs["base", default: []].isEmpty)
-                        if game.isReady { Button(m.t("launch.title")) { optionsFor = game.id } }
-                        Button(m.t("saves.menu")) { savesFor = game.id }
-                        Button(m.t("library.changeArtwork")) { chooseArtwork(game) }
-                        if !game.artworkPath.isEmpty {
-                            Button(m.t("library.resetArtwork")) { library.setArtwork("", for: game.id) }
-                        }
-                        if !game.appPath.isEmpty {
-                            Button(m.t("install.reveal")) {
-                                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: game.appPath)])
-                            }
-                        }
-                        if BuildFolder.location(for: game) != nil { Button(m.t("free.menu")) { freeSpaceFor = game.id } }
-                        Divider()
-                        Button(m.t("library.remove"), role: .destructive) { removing = game }.disabled(game.id == activeBuildID)
-                    } label: {
-                        HStack(spacing: 9) {
-                            Image(systemName: "ellipsis.circle").font(.system(size: 27, weight: .ultraLight))
-                            Text(m.t("library.manage")).font(.manrope(13))
-                        }
-                    }
-                    .menuStyle(.borderlessButton).fixedSize().foregroundStyle(.white)
+                    Button { manageOpenFor = manageOpenFor == nil ? game.id : nil } label: { ManageButtonLabel(title: m.t("library.manage")) }
+                        .buttonStyle(.plain).accessibilityLabel(m.t("library.manage"))
+                        .anchorPreference(key: ManageAnchorKey.self, value: .bounds) { $0 }
+                        .padTarget("hero.manage", scope: "main", radius: 12) { manageOpenFor = game.id }
                 }
             }
             .padding(.horizontal, 34).padding(.bottom, 34)
@@ -533,7 +530,7 @@ struct ContentView: View {
                         // The buttons a controller has here, named as the game names them (A on the right)
                         HStack(spacing: 18) {
                             padHint("A", m.t("pad.play")); padHint("X", m.t("pad.options")); padHint("B", m.t("pad.back"))
-                            padHint("Y", m.t("pad.saves"))
+                            padHint("Y", m.t("pad.manage"))
                             Image(systemName: "gamecontroller").foregroundStyle(.secondary)
                         }
                     }
@@ -583,6 +580,16 @@ struct ContentView: View {
     /// game's launch options, L and R switch the pages.
     private func padAction(_ action: LauncherGamepad.Action) {
         let sheetOpen = optionsFor != nil || controlsOpen || savesFor != nil || freeSpaceFor != nil
+        switch ManagePad.route(action, menuOpen: manageOpenFor != nil, sheetOpen: sheetOpen, hasGame: library.selected != nil && page == .library) {
+        case .close: manageOpenFor = nil; return
+        case .swallow: return
+        case .open:
+            guard let game = library.selected else { return }
+            padFocus.show(default: nil)   // the ring shows: the menu's own focus follows once it is drawn
+            manageOpenFor = game.id
+            return
+        case .pass: break
+        }
         if action == .b, savesFor != nil { savesFor = nil; return }
         // The Free space sheet: B closes it, the D-pad and A work in it, X, L and R do nothing behind it
         if freeSpaceFor != nil && [.b, .x, .l, .r].contains(action) { if action == .b { freeSpaceFor = nil }; return }
@@ -593,7 +600,8 @@ struct ContentView: View {
         }
         if removing != nil { return }   // the remove dialog is AppKit's; it takes the mouse or the keyboard
         if !padFocus.visible {
-            padFocus.show(default: !sheetOpen && page == .library ? library.selectedID.map { "card." + $0.uuidString } : nil)
+            padFocus.show(default: manageOpenFor != nil ? ManagePad.firstFocus(manageItems(for: library.selected))
+                          : !sheetOpen && page == .library ? library.selectedID.map { "card." + $0.uuidString } : nil)
             if [.up, .down, .left, .right].contains(action) { return }   // the first press only shows where the focus is
         }
         switch action {
@@ -608,11 +616,29 @@ struct ContentView: View {
             guard !sheetOpen, let at = LauncherPage.allCases.firstIndex(of: page) else { return }
             let pages = LauncherPage.allCases
             page = pages[(at + (action == .l ? pages.count - 1 : 1)) % pages.count]
-        case .y:   // the selected game's saves: the Manage menu is AppKit's, which a controller cannot open
-            if !sheetOpen, let game = library.selected { savesFor = game.id }
+        case .y:   // the Manage menu: ManagePad.route opened it above
+            return
         case .b:
             return
         }
+    }
+
+    /// The Manage menu's rows for a game, wired to the launcher's sheets and actions (ManageItem.list).
+    private func manageItems(_ game: LibraryGame) -> [ManageItem] {
+        ManageItem.list(game: game, labels: m.t, running: m.running, olderTools: toolsAge.older.contains(game.id), activeBuildID: activeBuildID,
+                        hasBuildFolder: BuildFolder.location(for: game) != nil,
+                        actions: ManageActions(
+                            rebuild: { configureBuild(game) }, options: { optionsFor = game.id }, saves: { savesFor = game.id },
+                            changeArtwork: { chooseArtwork(game) }, resetArtwork: { library.setArtwork("", for: game.id) },
+                            reveal: { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: game.appPath)]) },
+                            freeSpace: { freeSpaceFor = game.id }, remove: { removing = game }))
+    }
+
+    private func manageItems(for game: LibraryGame?) -> [ManageItem] { game.map(manageItems) ?? [] }
+
+    /// The scope a controller acts in when no menu is open: the innermost sheet, else the window.
+    private var currentPadScope: String {
+        savesFor != nil ? "saves" : freeSpaceFor != nil ? "free" : optionsFor != nil ? "launch" : controlsOpen ? "controls" : "main"
     }
 
     /// The space the collection row keeps around its cards for the focus ring (PadFocus draws it 4 pt outside a target).

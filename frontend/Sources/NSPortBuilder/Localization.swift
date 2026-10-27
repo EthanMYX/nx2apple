@@ -94,7 +94,7 @@ enum L10n {
         "saves.noMacSave": ("这台 Mac 上还没有这个游戏的存档。", "This Mac has no save for this game yet."),
         "saves.noDeviceSave": ("%@ 上还没有这个游戏的存档。", "%@ has no save for this game yet."),
         "saves.failed": ("复制失败：%@", "Copying failed: %@"),
-        "pad.saves": ("存档", "Saves"),
+        "pad.manage": ("管理", "Manage"),
         "dev.signStage": ("\u{4e3a} %@ \u{7b7e}\u{540d}", "Sign for %@"),
         "dev.installStage": ("\u{5b89}\u{88c5}\u{5230} %@", "Install on %@"),
         "dev.copyStage": ("复制游戏文件到 %@", "Copy the game files to %@"),
