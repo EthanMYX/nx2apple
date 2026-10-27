@@ -788,6 +788,45 @@ final class LibraryTests: XCTestCase {
         model.stages = [Stage(id: 1, name: "Extract game files", state: .running, percent: 40)]
         try capture("building", activeID: library.games[1].id)
         model.running = false
+
+        // ---- Saves (#66): the sheet with a stand-in devicectl and a temporary Mac folder, then its question, reached by the controller ----
+        do {
+            let game = library.games[0]
+            let installed = temporary.appendingPathComponent("DmIOS.app")
+            try FileManager.default.createDirectory(at: installed, withIntermediateDirectories: true)
+            try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": "com.example.hades"], format: .xml, options: 0)
+                .write(to: installed.appendingPathComponent("Info.plist"))
+            library.recordCompletedIOS(ipa: "", archive: "", app: installed.path, device: "00008150-AAAA", for: game.id)
+            let support = temporary.appendingPathComponent("Application Support")
+            let save = SaveTransfer.macFolder(titleID: game.titleID, support: support).appendingPathComponent("save/data.bin")
+            try FileManager.default.createDirectory(at: save.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("mac".utf8).write(to: save)
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -3 * 86_400)], ofItemAtPath: save.path)
+            let device = DeviceControl { args in   // a device whose save is from an hour ago
+                guard let i = args.firstIndex(of: "--json-output") else { return (false, "ERROR: not in the visual QA") }
+                let files = args.contains("--recurse") ? [["name": "data.bin", "fileType": "file", "modificationDate": ISO8601DateFormatter().string(from: Date(timeIntervalSinceNow: -3600))]] : []
+                try? JSONSerialization.data(withJSONObject: ["result": ["files": files]]).write(to: URL(fileURLWithPath: args[i + 1]))
+                return (true, "")
+            }
+            let focus = PadFocus()
+            let host = NSHostingView(rootView: SavesView(m: model, library: library, gameID: game.id, devicectl: device, support: support).environmentObject(focus))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 520), styleMask: [.titled], backing: .buffered, defer: false)
+            window.contentView = host
+            window.orderFront(nil)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+            func shot(_ name: String) throws {
+                let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: rep)
+                try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent(name + ".png"))
+            }
+            try shot("saves")
+            focus.scope = "saves"
+            focus.show(default: "saves.toDevice")
+            focus.activate()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+            try shot("saves-confirm")
+            window.orderOut(nil)
+        }
     }
 
     /// Issue #52: the failure note names the last real line, not just the exit code.

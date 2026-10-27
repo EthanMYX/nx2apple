@@ -35,6 +35,7 @@ struct ContentView: View {
     @State private var removing: LibraryGame?
     @State private var optionsFor: UUID?
     @State private var controlsOpen = false
+    @State private var savesFor: UUID?   // the game whose Saves sheet is open (SaveTransfer.swift)
     @StateObject private var controls = ControlLayout()
     @StateObject private var gamepad = LauncherGamepad()
     @StateObject private var padFocus = PadFocus()
@@ -128,6 +129,10 @@ struct ContentView: View {
         }
         .sheet(isPresented: $controlsOpen) { ControlsView(m: m, layout: controls).environmentObject(padFocus) }
         .sheet(isPresented: $m.showUpdateSheet) { UpdateSheet(m: m) }
+        .sheet(isPresented: Binding(get: { savesFor != nil }, set: { if !$0 { savesFor = nil } })) {
+            if let id = savesFor { SavesView(m: m, library: library, gameID: id).environmentObject(padFocus) }
+        }
+        .onChange(of: savesFor) { id in padFocus.scope = id != nil ? "saves" : "main" }
         .onChange(of: optionsFor) { id in padFocus.scope = id != nil ? "launch" : (controlsOpen ? "controls" : "main") }
         .onChange(of: controlsOpen) { open in padFocus.scope = open ? "controls" : (optionsFor != nil ? "launch" : "main") }
         .onChange(of: page) { _ in padFocus.focused = nil }
@@ -313,6 +318,7 @@ struct ContentView: View {
                     Menu {
                         Button(m.t("library.buildAgain")) { configureBuild(game) }.disabled(m.running || game.inputs["base", default: []].isEmpty)
                         if game.isReady { Button(m.t("launch.title")) { optionsFor = game.id } }
+                        Button(m.t("saves.menu")) { savesFor = game.id }
                         Button(m.t("library.changeArtwork")) { chooseArtwork(game) }
                         if !game.artworkPath.isEmpty {
                             Button(m.t("library.resetArtwork")) { library.setArtwork("", for: game.id) }
@@ -482,6 +488,7 @@ struct ContentView: View {
                         // The buttons a controller has here, named as the game names them (A on the right)
                         HStack(spacing: 18) {
                             padHint("A", m.t("pad.play")); padHint("X", m.t("pad.options")); padHint("B", m.t("pad.back"))
+                            padHint("Y", m.t("pad.saves"))
                             Image(systemName: "gamecontroller").foregroundStyle(.secondary)
                         }
                     }
@@ -530,7 +537,8 @@ struct ContentView: View {
     /// then the D-pad moves it (PadFocus), A activates, B closes a sheet or goes back to the library, X opens the selected
     /// game's launch options, L and R switch the pages.
     private func padAction(_ action: LauncherGamepad.Action) {
-        let sheetOpen = optionsFor != nil || controlsOpen
+        let sheetOpen = optionsFor != nil || controlsOpen || savesFor != nil
+        if action == .b, savesFor != nil { savesFor = nil; return }
         if action == .b {
             if optionsFor != nil { optionsFor = nil } else if controlsOpen { controlsOpen = false }
             else if searching { searching = false; search = "" } else if page != .library { page = .library }
@@ -553,7 +561,9 @@ struct ContentView: View {
             guard !sheetOpen, let at = LauncherPage.allCases.firstIndex(of: page) else { return }
             let pages = LauncherPage.allCases
             page = pages[(at + (action == .l ? pages.count - 1 : 1)) % pages.count]
-        case .b, .y:
+        case .y:   // the selected game's saves: the Manage menu is AppKit's, which a controller cannot open
+            if !sheetOpen, let game = library.selected { savesFor = game.id }
+        case .b:
             return
         }
     }
