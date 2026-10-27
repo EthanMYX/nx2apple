@@ -87,7 +87,14 @@ struct ContentView: View {
                 m.checkDeps()
                 if m.repoOK && m.repoIsGit { m.checkRepoUpdates(silent: true) }
                 m.checkAppUpdate(silent: true)
+                BuildNotifier.shared.watch(m, library: library)   // BuildNotifications.swift
             }
+        }
+        .onReceive(BuildNotifier.shared.$route) { route in   // a clicked build notification
+            guard let route else { return }
+            page = route.page
+            if let id = route.game { library.selectedID = id }
+            DispatchQueue.main.async { BuildNotifier.shared.route = nil }
         }
         .onChange(of: library.games) { _ in
             refreshArtwork()
