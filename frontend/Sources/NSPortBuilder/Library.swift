@@ -28,9 +28,20 @@ struct LibraryGame: Codable, Identifiable, Equatable {
     /// Signed and installed on a paired device (installedDevice is its UDID): Play starts it there.
     var onDevice: Bool { !installedDevice.isEmpty && FileManager.default.fileExists(atPath: iosAppPath + "/Info.plist") }
 
-    var hasIOSBuild: Bool {
-        (!ipaPath.isEmpty && FileManager.default.fileExists(atPath: ipaPath)) ||
-        (!iosAppPath.isEmpty && FileManager.default.fileExists(atPath: iosAppPath + "/Info.plist"))
+    var hasIOSBuild: Bool { hasIPA || hasIOSApp }
+    var hasIPA: Bool { !ipaPath.isEmpty && FileManager.default.fileExists(atPath: ipaPath) }
+    var hasIOSApp: Bool { !iosAppPath.isEmpty && FileManager.default.fileExists(atPath: iosAppPath + "/Info.plist") }
+
+    /// What the hero's primary button does: play the Mac app, open the installed iPhone app, else build (an IPA alone is not a reason to show anything else).
+    enum Primary: Equatable { case play, openOnDevice, build }
+    var primary: Primary { isReady ? .play : (onDevice ? .openOnDevice : .build) }
+
+    /// What "Reveal in Finder" shows: the Mac app if it exists, else the IPA, else the iOS app; nil when none does (the item is hidden).
+    var revealTarget: String? {
+        if isReady { return appPath }
+        if hasIPA { return ipaPath }
+        if hasIOSApp { return iosAppPath }
+        return nil
     }
 }
 
@@ -246,7 +257,24 @@ final class GameLibrary: ObservableObject {
             }
             catch { self.error = error.localizedDescription }
         }
+        pruneMissingPaths()
         selectedID = games.first?.id
+    }
+
+    /// Forgets a remembered Mac app, IPA or iOS app that is gone from disk, so nothing points at it. Saves only when something changed;
+    /// run on load and after a scan, never from a view.
+    func pruneMissingPaths() {
+        let fm = FileManager.default
+        var changed = false
+        for index in games.indices {
+            let game = games[index]
+            if !game.appPath.isEmpty && !fm.fileExists(atPath: game.appPath) { games[index].appPath = ""; changed = true }
+            if !game.ipaPath.isEmpty && !fm.fileExists(atPath: game.ipaPath) { games[index].ipaPath = ""; changed = true }
+            if !game.iosAppPath.isEmpty && !fm.fileExists(atPath: game.iosAppPath + "/Info.plist") {
+                games[index].iosAppPath = ""; games[index].installedDevice = ""; changed = true
+            }
+        }
+        if changed { save() }
     }
 
     var selected: LibraryGame? { games.first { $0.id == selectedID } }
@@ -359,6 +387,7 @@ final class GameLibrary: ObservableObject {
                     if let existing = self.games.first(where: { $0.titleID == info.titleID }), existing.isReady { continue }
                     _ = try? self.addApp(url)
                 }
+                self.pruneMissingPaths()
                 self.selectedID = previousSelection ?? self.games.first?.id
                 self.scanning = false
             }

@@ -42,7 +42,6 @@ enum L10n {
     /// key: (Chinese, English)
     static let table: [String: (zh: String, en: String)] = [
         "library.readyIOS": ("\u{53ef}\u{7528}\u{4e8e} iPhone", "Ready for iPhone"),
-        "library.showIOS": ("\u{663e}\u{793a} iPhone \u{6784}\u{5efa}", "Show iPhone build"),
         "library.stopping": ("\u{6b63}\u{5728}\u{505c}\u{6b62}…", "Stopping…"),
         "build.setup": ("\u{5b8c}\u{6210}\u{8bbe}\u{7f6e}", "Finish setup"),
         "library.chooseFolder": ("\u{6e38}\u{620f}\u{6587}\u{4ef6}\u{5939}\u{2026}", "Change folder…"),
