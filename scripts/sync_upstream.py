@@ -358,12 +358,16 @@ def patch_tests_makefile(t):
     out, need = [], False
     for ln in lines:
         if ln.startswith('$(B)/'):
-            need = 'hle_profile.c' not in ln and any(u in ln for u in USERS)
-            out.append(ln); continue
-        if need and ln.startswith('\t') and ln.lstrip().startswith('clang') and 'hle_profile.c' not in ln:
-            ln = ln.rstrip('\n') + ' ../hle_profile.c\n'
-        elif not (ln.startswith('\t') or not ln.strip()):
-            need = False
+            # a rule header: does its prerequisite list reach a dm_profile() caller?
+            need = any(u in ln for u in USERS)
+            out.append(ln)
+            continue
+        if need:
+            # the recipe line of that rule: append the accessor's object if absent
+            if ln.startswith('\t') and ln.lstrip().startswith('clang') and 'hle_profile.c' not in ln:
+                ln = ln.rstrip('\n') + ' ../hle_profile.c\n'
+            elif not ln.startswith('\t') and ln.strip():
+                need = False          # a non-recipe line ends the rule
         out.append(ln)
     t = ''.join(out)
     # the memory block compiles ../hle_svc.c from MEM_DEPS
