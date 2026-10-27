@@ -1,6 +1,9 @@
 <div align="center">
 
-# NX2Apple
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="frontend/screenshots/logo-dark.png">
+  <img src="frontend/screenshots/logo-light.png" width="360" alt="NX2Apple, by nxnative">
+</picture>
 
 **你的 Switch 游戏，跑在你的 iPhone 上。**
 
