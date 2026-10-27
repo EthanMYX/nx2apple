@@ -705,6 +705,22 @@ def patch_main_m(t):
         done(f'main.m {name}')
     return t
 
+def patch_game_py(t):
+    """dm/games/game.py carries two fork additions: the tex_bc_cpu profile key (BC decode for
+    GPUs without BC support) and the 'profile' subcommand that writes the runtime profile the
+    host reads from DM_PROFILE. Both are needed by other fork files, so a sync must keep them.
+    """
+    if "a[0] == 'profile'" in t and 'tex_bc_cpu' in t: return skip('game.py (already patched)')
+    bad = []
+    if "'profile'" not in t:
+        bad.append('profile subcommand')
+    if 'tex_bc_cpu' not in t:
+        bad.append('tex_bc_cpu')
+    if bad: fail(f'dm/games/game.py: fork additions missing: {", ".join(bad)} '
+                 '(the sync replaced this file with a version without them; re-apply by hand)')
+    return skip('game.py (fork additions present)')
+
+
 def patch_dm_h(t):
     """dm.h pulls in hle_profile.h, so every host source can call dm_profile().
 
@@ -748,6 +764,7 @@ MARKERS = {
     'dm/gfx/nvn/nvn_mtl.m': 'if (on_sub_thread()) rec_publish();',
     'dm/games/0100A00019DE0000/game.tsv': 'build	v1	1.0.137848',
     'dm/host/dm.h': 'hle_profile.h',
+    'dm/games/game.py': "elif len(a) == 3 and a[0] == 'profile':",
 }
 PATCHERS = {
     'dm/host/hle_fs.c': patch_hle_fs,
@@ -760,6 +777,7 @@ PATCHERS = {
     'dm/gfx/nvn/nvn_mtl.m': patch_nvn_mtl,
     'dm/games/0100A00019DE0000/game.tsv': patch_hades2,
     'dm/host/dm.h': patch_dm_h,
+    'dm/games/game.py': patch_game_py,
 }
 
 report, problems = [], []
