@@ -48,7 +48,8 @@ NSString *dm_picked_data_path(BOOL *stale) {
     if (isStale) {
         // The system still resolves it but asks for a rewrite (its own wording: stale). Same
         // signature, so a fresh bookmark sticks: self-heal instead of making the player pick again.
-        if (NSData *again = fresh_bookmark(url)) [NSUserDefaults.standardUserDefaults setObject:again forKey:kPickedData];
+        NSData *again = fresh_bookmark(url);
+        if (again) [NSUserDefaults.standardUserDefaults setObject:again forKey:kPickedData];
         if (stale) *stale = YES;
     }
     // The picker can hand back a file that was moved or deleted since. The caller checks what it
