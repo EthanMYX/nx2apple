@@ -718,6 +718,21 @@ def rmtree(p):
         if sdk.returncode:
             raise BuildError('the iOS SDK is not installed (Xcode 15 and later download the platform separately): run xcodebuild -downloadPlatform iOS, or pick it in Xcode → Settings → Components')
 """)]))
+    # An Intel Python under Rosetta (an Intel Homebrew in /usr/local on Apple silicon) has children
+    # that prefer the x86_64 slice: the shader translator's universal apphost then asks for an x86_64
+    # .NET, finds only the arm64 one, prints nothing, and the build stops at the iOS shader step with
+    # an empty "xlate_source: lock … / actual" — which reads like a broken translator. ufooer found
+    # this on an iPad bring-up (PR #31, item 3); saying it up front turns a mystery into a one-line fix.
+    P.append(('Rosetta check', 'is an Intel Python running under Rosetta', [(
+        "    if not keys.is_file(): raise BuildError(f'no such file: {keys}')\n",
+        """    if not keys.is_file(): raise BuildError(f'no such file: {keys}')
+    # An Intel Python (an Intel Homebrew under /usr/local) runs under Rosetta on an Apple silicon Mac, and its children prefer the
+    # x86_64 slice: the shader translator's universal apphost then wants an x86_64 .NET, finds the arm64 one, prints nothing, and
+    # the build stops at the iOS shader step with "xlate_source: lock … / actual" (empty), which reads like a stale translator.
+    # Say so here instead (ufooer's PR #31, item 3).
+    if sys.platform == 'darwin' and subprocess.run(['sysctl', '-n', 'sysctl.proc_translated'], capture_output=True, text=True).stdout.strip() == '1':
+        raise BuildError(f'{sys.executable} is an Intel Python running under Rosetta; run the build with a native arm64 Python (e.g. /usr/bin/python3 or Homebrew in /opt/homebrew)')
+""")]))
     for name, marker, pairs in P:
         if marker in t:
             skip(f'NSP script {name} (already patched)'); continue
