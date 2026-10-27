@@ -553,6 +553,7 @@ struct ContentView: View {
             if let settings = LaunchSetting.forMac(app: game.appPath, titleID: game.titleID, repo: m.repoPath, labels: m.t) {
                 environment.merge(game.launchEnvironment(settings)) { _, own in own }
             }
+            environment.merge(game.modEnvironment(GameMod.list(in: GameMod.folder(for: game, library: library.folder), titleID: game.titleID))) { _, mods in mods }
             if !environment.isEmpty { configuration.environment = environment }
             NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: game.appPath), configuration: configuration) { _, error in
                 DispatchQueue.main.async {

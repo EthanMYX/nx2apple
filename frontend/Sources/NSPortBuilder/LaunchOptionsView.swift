@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// A game's launch options: the settings its Mac app was packed with (dm/launcher.json), drawn as the
-/// iPhone launcher draws them, grouped by section. The basic settings come first, and the rest
+/// iPhone launcher draws them, grouped by section. The basic settings come first, then the game's mods, and the rest
 /// under Advanced settings. Play passes them to the app as its environment.
 struct LaunchOptionsView: View {
     @ObservedObject var m: BuildModel
@@ -10,11 +10,18 @@ struct LaunchOptionsView: View {
     let gameID: UUID
     @Environment(\.dismiss) private var dismiss
     @State private var advancedOpen = false
+    @State private var modsRevision = 0   // bumped by Refresh: the folder is read again
     @EnvironmentObject private var focus: PadFocus
 
     private var game: LibraryGame? { library.games.first { $0.id == gameID } }
     private var settings: [LaunchSetting]? {
         game.flatMap { LaunchSetting.forMac(app: $0.appPath, titleID: $0.titleID, repo: m.repoPath, labels: m.t) }
+    }
+    private var modsFolder: URL? { game.map { GameMod.folder(for: $0, library: library.folder) } }
+    private var mods: [GameMod] {
+        _ = modsRevision
+        guard let game, let modsFolder else { return [] }
+        return GameMod.list(in: modsFolder, titleID: game.titleID)
     }
 
     var body: some View {
@@ -32,6 +39,7 @@ struct LaunchOptionsView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
                         groups(settings.filter(\.isBasic), game, all: settings)
+                        modsSection(game)
                         let advanced = settings.filter { !$0.isBasic }
                         if !advanced.isEmpty {
                             card {
@@ -192,5 +200,79 @@ struct LaunchOptionsView: View {
                     .labelsHidden().toggleStyle(LauncherSwitchStyle())
             }
         }
+    }
+
+    // ---- mods ----
+
+    /// The game's mods folder as switches. A mod changes the files the game reads, saves included: the note says so, and
+    /// Show saves opens the folder to back them up before switching one.
+    @ViewBuilder private func modsSection(_ game: LibraryGame) -> some View {
+        let list = mods
+        VStack(alignment: .leading, spacing: 10) {
+            heading(m.t("launch.mods"))
+            card {
+                if list.isEmpty {
+                    HStack(spacing: 16) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(m.t("launch.modsNone")).font(.manrope(14, .medium))
+                            Text(m.t("launch.modsHow")).font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal, 18).padding(.vertical, 13)
+                } else {
+                    ForEach(list) { mod in
+                        HStack(spacing: 16) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(mod.name).font(.manrope(14, .medium)).lineLimit(1)
+                                if !mod.usable {
+                                    Text(m.t("launch.modCode")).font(.manrope(12)).foregroundStyle(.secondary)
+                                }
+                            }
+                            Spacer(minLength: 12)
+                            Toggle("", isOn: Binding(get: { mod.usable && game.mods.contains(mod.name) },
+                                                     set: { library.setMod(mod.name, on: $0, for: gameID) }))
+                                .labelsHidden().toggleStyle(LauncherSwitchStyle()).disabled(!mod.usable)
+                        }
+                        .padding(.horizontal, 18).padding(.vertical, 13).frame(minHeight: 52)
+                        .padTarget("mod." + mod.name, scope: "launch", radius: 10,
+                                   activate: { if mod.usable { library.setMod(mod.name, on: !game.mods.contains(mod.name), for: gameID) } },
+                                   adjust: { _ in if mod.usable { library.setMod(mod.name, on: !game.mods.contains(mod.name), for: gameID) } })
+                        divider
+                    }
+                }
+                if list.isEmpty { divider }
+                HStack(spacing: 10) {
+                    Spacer()
+                    Button(m.t("launch.modsRefresh")) { modsRevision += 1 }
+                        .padTarget("mods.refresh", scope: "launch") { modsRevision += 1 }
+                    Button(m.t("launch.modsOpen")) { openModsFolder() }
+                        .padTarget("mods.open", scope: "launch") { openModsFolder() }
+                    Button(m.t("launch.savesShow")) { showSaves(game) }
+                        .padTarget("mods.saves", scope: "launch") { showSaves(game) }
+                }
+                .buttonStyle(LauncherSecondaryButtonStyle())
+                .padding(.horizontal, 18).padding(.vertical, 12)
+            }
+            Text(m.t(list.count > 1 ? "launch.modsNoteOrder" : "launch.modsNote")).font(.manrope(12)).foregroundStyle(.secondary)
+                .padding(.leading, 2).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func openModsFolder() {
+        guard let folder = modsFolder else { return }
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(folder)
+        modsRevision += 1
+    }
+
+    /// The app's saves (dm/mac/launcher.c: ~/Library/Application Support/nxnative/<title ID>/), to back them up.
+    private func showSaves(_ game: LibraryGame) {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("nxnative").appendingPathComponent(game.titleID)
+        let save = support.appendingPathComponent("save")
+        let target = FileManager.default.fileExists(atPath: save.path) ? save : support
+        if FileManager.default.fileExists(atPath: target.path) { NSWorkspace.shared.activateFileViewerSelecting([target]) }
+        else { NSWorkspace.shared.open(support.deletingLastPathComponent()) }
     }
 }
