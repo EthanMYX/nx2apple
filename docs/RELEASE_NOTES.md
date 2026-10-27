@@ -1,12 +1,6 @@
-# NX2Apple v0.5.0 — release notes (draft)
+# NX2Apple v0.5.0 — release notes
 
-The text below is the prepared body of the v0.5.0 release. English first, then Chinese, as two
-complete halves — see RELEASE-NOTES-GUIDE.md. Publish by tagging `v0.5.0` once the device round
-has passed; CI builds the three macOS assets.
-
-**Proposed title:** `v0.5.0 — 全新 Mac 启动器，iPhone 数据自由 / The Mac launcher arrives, iPhone data freedom`
-
----
+This is the text of the [v0.5.0 release](https://github.com/LNPANDY/NX2Apple/releases/tag/v0.5.0). Earlier releases are on the releases page. English first, then Chinese, as two complete halves — see RELEASE-NOTES-GUIDE.md.
 
 ## What this release does
 
