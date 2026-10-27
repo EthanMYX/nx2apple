@@ -544,6 +544,13 @@ resident + headroom：约 3,375 MB = 未生效，6–8 GB = 已生效）见
 
 ## 🙏 致谢
 
+**社区贡献者** —— 这个项目的代码不只是一个维护者的输出：
+
+- **[v0lumehi](https://github.com/v0lumehi)** —— **Mac 前端的启动器界面**（PR [#27](https://github.com/LNPANDY/NX2Apple/pull/27)，40 个文件）：游戏库、封面图、每游戏启动选项、真进度流、能真正结束整个构建进程组的 Stop。Mac 端从"一个构建表单"变成了"打开像一台 Switch 的启动器"的第一版。
+- **[m1guelpf](https://github.com/m1guelpf)**（Miguel Piedrafita）—— 两个 HLE 修复（PR [#24](https://github.com/LNPANDY/NX2Apple/pull/24)、[#26](https://github.com/LNPANDY/NX2Apple/pull/26)）：补上了 `EnableAlbumImageTakenNotification` 和 `CreateWithAdjustableSystemClock` 及其快照类型字节——两个原本会让游戏读到空指针的缺失条目，各带测试。
+
+想加入这个列表？上面的[参与贡献](#参与贡献着色器与新游戏)写了怎么开始；issue 里附上完整日志的报告和带测试的修复最快。
+
 所有模拟相关的工作都是别人的。本仓库在其之上增加了归档子系统：
 
 - **[nxnative](https://github.com/seedds/nxnative)**（MIT）—— 本仓库所基于的原生执行工具链：

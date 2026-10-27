@@ -575,6 +575,13 @@ to tell from `Documents/log.txt` (resident + headroom: ~3,375 MB = not in effect
 
 ## 🙏 Credits
 
+**Community contributors** — this project's code is not one maintainer's output:
+
+- **[v0lumehi](https://github.com/v0lumehi)** — **the Mac front end's launcher** (PR [#27](https://github.com/LNPANDY/NX2Apple/pull/27), 40 files): a game library with key art, per-game launch options, a real progress stream, and a Stop that ends the whole build's process group. The Mac app went from "a build form" to the first version of a launcher that opens like a Switch.
+- **[m1guelpf](https://github.com/m1guelpf)** (Miguel Piedrafita) — two HLE fixes (PRs [#24](https://github.com/LNPANDY/NX2Apple/pull/24) and [#26](https://github.com/LNPANDY/NX2Apple/pull/26)): the missing `EnableAlbumImageTakenNotification` and `CreateWithAdjustableSystemClock` entries plus their snapshot type byte — each would have read a null in games that call them, and each came with a test.
+
+Want on this list? [Contributing](#contributing-shaders-and-game-support) says how to start; reports with a full log and fixes with a test move fastest.
+
 All of the emulation work is other people's. This repository adds the archive subsystem on top:
 
 - **[nxnative](https://github.com/seedds/nxnative)** (MIT) — the native-execution toolchain this
