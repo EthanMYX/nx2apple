@@ -656,6 +656,7 @@ final class LibraryTests: XCTestCase {
         try capture("library")
         try capture("library-search", search: "zel")
         try capture("library-small", width: 900, height: 680)
+        try capture("library-fullscreen", width: 2000, height: 1125)   // the cards at their widest: the row must fit under the hero
         try capture("empty", empty: true)
         try capture("build", page: .builds)
         try capture("build-small", width: 900, height: 680, page: .builds)
@@ -810,5 +811,20 @@ final class LibraryTests: XCTestCase {
         XCTAssertEqual(BuildModel.titleID("Mario Wonder [010015100B514000][v0].nsp"), 0x010015100B514000)
         XCTAssertEqual(BuildModel.titleID("/ROMs/TotK [01007EF00011E000].xci"), 0x01007EF00011E000)
         XCTAssertNil(BuildModel.titleID("no title id here.nsp"))
+    }
+
+    /// Issue #53: the interpreter floor is the script's own, so Apple's 3.9 is never picked.
+    func testThePythonFloorIsTheScriptsOwnThreeTwelve() {
+        XCTAssertEqual(BuildModel.minPython.0, 3)
+        XCTAssertEqual(BuildModel.minPython.1, 12,
+                       "build_ipa_from_nsp.py:1911 refuses anything below 3.12; a lower floor let the "
+                       + "app pick /usr/bin/python3 and the build died in the script")
+        let (path, _) = BuildModel.findPython()
+        XCTAssertFalse(path.isEmpty, "a Mac with any usable interpreter must yield one")
+        if let v = BuildModel.pythonVersion(path) {
+            let floor = BuildModel.minPython
+            XCTAssertTrue(v.0 > floor.0 || (v.0 == floor.0 && v.1 >= floor.1),
+                          "picked \(path) at \(v.0).\(v.1), below the \(floor.0).\(floor.1) floor")
+        }
     }
 }

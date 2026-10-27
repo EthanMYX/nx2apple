@@ -127,6 +127,7 @@ struct ContentView: View {
             if let id = optionsFor { LaunchOptionsView(m: m, library: library, gameID: id).environmentObject(padFocus) }
         }
         .sheet(isPresented: $controlsOpen) { ControlsView(m: m, layout: controls).environmentObject(padFocus) }
+        .sheet(isPresented: $m.showUpdateSheet) { UpdateSheet(m: m) }
         .onChange(of: optionsFor) { id in padFocus.scope = id != nil ? "launch" : (controlsOpen ? "controls" : "main") }
         .onChange(of: controlsOpen) { open in padFocus.scope = open ? "controls" : (optionsFor != nil ? "launch" : "main") }
         .onChange(of: page) { _ in padFocus.focused = nil }
@@ -216,6 +217,9 @@ struct ContentView: View {
         withAnimation(.easeOut(duration: 0.2)) { searching = false }
     }
 
+    /// The collection row's measured height (CollectionHeightKey); the hero above it takes the rest of the page.
+    @State private var collectionHeight: CGFloat = 274
+
     private var libraryPage: some View {
         GeometryReader { geometry in
             if library.games.isEmpty {
@@ -224,11 +228,15 @@ struct ContentView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         if let game = library.selected {
-                            hero(game, width: geometry.size.width, height: max(240, geometry.size.height - 274))
+                            hero(game, width: geometry.size.width, height: max(240, geometry.size.height - collectionHeight))
                         }
+                        // The hero takes what the collection leaves: the row's height grows with the window's width (its cards
+                        // do, up to 300 pt), so a fixed share left a fullscreen window's cards cut off at the bottom
                         collection(width: geometry.size.width)
+                            .background(GeometryReader { g in Color.clear.preference(key: CollectionHeightKey.self, value: g.size.height) })
                     }
                 }
+                .onPreferenceChange(CollectionHeightKey.self) { h in if h > 0, abs(h - collectionHeight) > 0.5 { collectionHeight = h } }
             }
         }
     }
@@ -455,6 +463,11 @@ struct ContentView: View {
                 } else {
                     Image(systemName: "desktopcomputer").foregroundStyle(.secondary)
                     Text(m.t("library.localNote")).font(.manrope(13)).foregroundStyle(.secondary)
+                    if let n = m.autoPulled, n > 0 {
+                        // The automatic update when the app opened (BuildModel.autoPull): the build tools are the current ones
+                        Circle().fill(LauncherPalette.ready).frame(width: 6, height: 6).padding(.leading, 10)
+                        Text(String(format: m.t("library.toolsUpdated"), n)).font(.manrope(13)).foregroundStyle(.secondary)
+                    }
                     Spacer()
                     if let staged = m.appStaged {
                         // A downloaded, verified update (BuildModel.stageAppUpdate): it goes in when the app quits, or now.
@@ -691,4 +704,10 @@ private struct EnclosingScrollView: NSViewRepresentable {
         probe.row = row
         DispatchQueue.main.async { if let view = probe.enclosingScrollView { row.attach(view) } }
     }
+}
+
+/// The library's collection row reports its height, so the hero above it fills exactly what is left.
+private struct CollectionHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }

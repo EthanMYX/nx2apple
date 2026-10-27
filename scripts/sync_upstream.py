@@ -733,6 +733,19 @@ def rmtree(p):
     if sys.platform == 'darwin' and subprocess.run(['sysctl', '-n', 'sysctl.proc_translated'], capture_output=True, text=True).stdout.strip() == '1':
         raise BuildError(f'{sys.executable} is an Intel Python running under Rosetta; run the build with a native arm64 Python (e.g. /usr/bin/python3 or Homebrew in /opt/homebrew)')
 """)]))
+    # glslangValidator is only needed by an OpenGL game, and build_gl_shaders already checks for it —
+    # but by then the extraction and the capture have run for minutes, and the check raises before
+    # layer_shaders creates gl_shaders.log, so the failure had no log to read (issue #71). Checked
+    # next to check_metal, which is in the same place for the same reason.
+    P.append(('GL shader tool check', 'glslangValidator is not installed', [(
+        "    if gfx == 'nvn': check_metal(py, repo, env)   # before the captures and the shader split, which take minutes\n",
+        """    if gfx == 'nvn': check_metal(py, repo, env)   # before the captures and the shader split, which take minutes
+    # Same reason as check_metal: build_gl_shaders checks for glslangValidator, but by then the
+    # extraction and the capture have run for minutes, and the check raises before layer_shaders
+    # creates gl_shaders.log — so the GUI showed a failure with no log to read (issue #71).
+    if gfx == 'gl' and not shutil.which('glslangValidator', path=env['PATH']):
+        raise BuildError("glslangValidator is not installed: an OpenGL game's GLSL shaders need it to compile to SPIR-V (brew install glslang)")
+""")]))
     for name, marker, pairs in P:
         if marker in t:
             skip(f'NSP script {name} (already patched)'); continue
@@ -1166,6 +1179,16 @@ PATCHERS = {
     'dm/ios/tests/test_profile_pack.py': patch_test_profile_pack,
     'docs/env_switches.tsv': patch_env_switches,
 }
+
+# PATCHED, MARKERS and PATCHERS are three views of one set and have to agree, or a carrier works
+# while something else refuses to let it through. v0lumehi hit exactly that (PR #59): front_mac.m,
+# patch_nso.py and Hades II's game.tsv had patchers and markers but were missing from PATCHED, so
+# pr-scope refused the PR that carried them. Checked here rather than remembered.
+assert set(PATCHED) == set(MARKERS) == set(PATCHERS), (
+    'the carrier tables disagree: PATCHED-only %s, MARKERS-only %s, PATCHERS-only %s' % (
+        sorted(set(PATCHED) - set(MARKERS) | set(PATCHED) - set(PATCHERS)),
+        sorted(set(MARKERS) - set(PATCHED) | set(MARKERS) - set(PATCHERS)),
+        sorted(set(PATCHERS) - set(PATCHED) | set(PATCHERS) - set(MARKERS))))
 
 report, problems = [], []
 class SyncProblem(Exception): pass

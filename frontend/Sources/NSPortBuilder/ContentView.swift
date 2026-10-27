@@ -301,6 +301,13 @@ final class BuildModel: ObservableObject {
     @Published var repoStatus = ""
     /// nil = not checked yet, 0 = up to date, n = n commits behind origin/main.
     @Published var repoBehind: Int?
+    /// Pull origin/main by itself when the app opens (Settings; on by default), so the build tools are the current ones:
+    /// a checkout days behind built with tools main had already fixed (spirv-cross without its x bit, #41).
+    @Published var autoUpdateRepo = UserDefaults.standard.object(forKey: "autoUpdateRepo") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(autoUpdateRepo, forKey: "autoUpdateRepo") }
+    }
+    /// The commits the automatic update brought when the app opened; the library's activity line names them. nil: none.
+    @Published var autoPulled: Int?
 
     nonisolated static func gitBinary() -> String? {
         for c in ["/usr/bin/git", "/opt/homebrew/bin/git", "/usr/local/bin/git"]
@@ -379,6 +386,7 @@ final class BuildModel: ObservableObject {
                 if behind >= 0 {
                     self.repoBehind = behind
                     if !silent { self.repoStatus = behind == 0 ? self.t("repo.upToDate") : String(format: self.t("repo.behind"), behind) }
+                    else if behind > 0 && self.autoUpdateRepo { self.autoPull(behind) }   // the check when the app opens
                 } else if !silent {
                     self.repoStatus = self.t("repo.netFail")
                 }
@@ -405,6 +413,38 @@ final class BuildModel: ObservableObject {
                 }
             }
         }
+    }
+
+    /// The automatic update when the app opens: a fast-forward to origin/main, only for a checkout on main with no changes
+    /// to its tracked files and no build running, so a checkout someone works in is never touched. Settings says what
+    /// happened (or why not), and the library's activity line names the new commits.
+    func autoPull(_ behind: Int) {
+        guard !running, !repoBusy, repoOK, repoIsGit, let git = Self.gitBinary() else { return }
+        repoBusy = true
+        let dir = repoPath
+        DispatchQueue.global().async {
+            let branch = Self.runQuiet([git, "-C", dir, "rev-parse", "--abbrev-ref", "HEAD"], env: Self.gitEnv())
+            let status = Self.runQuiet([git, "-C", dir, "status", "--porcelain", "--untracked-files=no"], env: Self.gitEnv())
+            let allowed = branch.ok && status.ok && Self.autoPullAllowed(branch: branch.out, status: status.out)
+            let pulled = allowed ? Self.runQuiet([git, "-C", dir, "pull", "--ff-only", "origin", "main"], env: Self.gitEnv()) : nil
+            DispatchQueue.main.async {
+                self.repoBusy = false
+                guard let pulled else { self.repoStatus = self.t("repo.autoSkipped"); return }
+                if pulled.ok {
+                    self.repoBehind = 0; self.autoPulled = behind
+                    self.repoStatus = String(format: self.t("repo.autoPulled"), behind)
+                } else {
+                    self.repoStatus = self.t("repo.pullFail")
+                    self.append(pulled.out + "\n")
+                }
+            }
+        }
+    }
+
+    /// A checkout the automatic update may move: on main, with no changes to tracked files (untracked files stay; a pull
+    /// that would overwrite one fails as a fast-forward and says so).
+    nonisolated static func autoPullAllowed(branch: String, status: String) -> Bool {
+        branch.trimmingCharacters(in: .whitespacesAndNewlines) == "main" && status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// A ZIP copy has no .git: adopt it into git in place (init, remote, fetch, checkout) so the
@@ -441,9 +481,15 @@ final class BuildModel: ObservableObject {
     // The rules (what is verified, which copies replace themselves, never during a build) are in AppUpdate.swift.
 
     /// Bump together with each release tag; the update check compares it with the latest release.
-    static let appVersion = "0.4.7"
+    static let appVersion = "0.4.8"
+    /// The update checkAppUpdate found: the tag, the asset to download, its digest, and the release
+    /// notes the sheet shows. The notes are why the sheet exists — "update available" alone told a
+    /// user nothing about what they would get.
     @Published var appUpdate: AppUpdate.Release?
     @Published var appBusy = false
+    /// Whether the "a new version is out" sheet is up: opened by the launch check and by Check for
+    /// updates, so a user learns what changed before deciding, not after downloading.
+    @Published var showUpdateSheet = false
     @Published var appStatus = ""
     /// Download a new release by itself and install it when the app quits (Settings; on by default). Off, the
     /// Update button in Settings works as before: download, swap in, relaunch.
@@ -458,6 +504,12 @@ final class BuildModel: ObservableObject {
     /// Whether this copy may replace itself; a launcher built from the repository never does (tests set it).
     var appInstallability = AppUpdate.installability(Bundle.main.bundleURL, appVersion: BuildModel.appVersion)
     private var quitObserver: NSObjectProtocol?
+
+    /// The download names this build accepts, newest first. Every release must carry at least one of
+    /// them or an install from that era cannot update itself: NX2Apple is current, nxnative is for
+    /// installs from before the rename to NX2Apple, NS-Port-Builder for installs before that.
+    nonisolated static let appAssetNames = ["NX2Apple-macOS-arm64.zip", "nxnative-macOS-arm64.zip",
+                                           "NS-Port-Builder-macOS-arm64.zip"]
 
     nonisolated static func isNewer(_ tag: String, than current: String) -> Bool {
         func nums(_ s: String) -> [Int] { s.split(separator: ".").map { Int($0.filter { $0.isNumber }) ?? 0 } }
@@ -491,9 +543,20 @@ final class BuildModel: ObservableObject {
         if !silent { appStatus = t("app.checking") }
         URLSession.shared.dataTask(with: URL(string: "https://api.github.com/repos/LNPANDY/NX2Apple/releases/latest")!) { data, _, _ in
             var found: AppUpdate.Release?
-            if let d = data, let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-               let r = Self.appRelease(fromJSON: obj), Self.isNewer(r.tag, than: Self.appVersion) {
-                found = r
+            // A newer release whose download this build cannot name is NOT "up to date". That
+            // distinction is the difference between a user who updates and one who sits on 0.4.6
+            // for ever: 0.4.6 and 0.4.7 look for exactly "NS-Port-Builder-macOS-arm64.zip", and if a
+            // release ever ships without that name they report "已是最新" and stop.
+            var newerTag: String?
+            if let d = data, let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+                let tag = obj["tag_name"] as? String ?? ""
+                if Self.isNewer(tag, than: Self.appVersion) {
+                    newerTag = tag
+                    if var r = Self.appRelease(fromJSON: obj) {
+                        r.notes = (obj["body"] as? String) ?? ""
+                        found = r
+                    }
+                }
             }
             DispatchQueue.main.async {
                 self.appBusy = false
@@ -506,9 +569,22 @@ final class BuildModel: ObservableObject {
                         if self.appStaged?.release == f { self.appStatus = String(format: self.t("app.ready"), f.tag) }
                         else if self.autoUpdateApp { self.stageAppUpdate(f, automatic: true) }
                         else { self.appStatus = String(format: self.t("app.found"), f.tag) }
+                        // The sheet opens either way: it is the only place the release notes appear,
+                        // and "a new version is out" without saying what changed is what made people
+                        // press Update blindly or not at all. In automatic mode it is also where
+                        // Restart now lives, and it says the download is already running.
+                        self.showUpdateSheet = true
                     }
                 } else if !silent {
-                    self.appStatus = data == nil ? self.t("app.netFail") : self.t("app.upToDate")
+                    if data == nil {
+                        self.appStatus = self.t("app.netFail")
+                    } else if let tag = newerTag {
+                        // The release exists; this app just cannot find its own asset name in it.
+                        self.appStatus = String(format: self.t("app.noAsset"), tag)
+                        self.appUpdate = nil
+                    } else {
+                        self.appStatus = self.t("app.upToDate")
+                    }
                 }
             }
         }.resume()
@@ -771,7 +847,11 @@ final class BuildModel: ObservableObject {
             fail(repoPath.isEmpty ? t("msg.repoInvalidEmpty") : String(format: t("msg.repoInvalid"), shortPath(repoPath)))
             return
         }
-        let py = pythonPath.isEmpty ? "/usr/bin/python3" : pythonPath
+        // Resolve the interpreter here if the dependency check has not landed yet. checkDeps()
+        // runs on a background queue and startBuild() can beat it — for a moment pythonPath is
+        // empty, and the old fallback was Apple's /usr/bin/python3 (3.9), which the script then
+        // rejected with "require Python 3.12 or newer" whatever the machine actually had (#53).
+        let py = pythonPath.isEmpty ? Self.findPython().path : pythonPath
 
         // One folder when everything lives together; otherwise a staging folder of symlinks. A folder
         // that holds other games too (a ROMs folder with one file per game) is staged as well: the
@@ -1503,7 +1583,12 @@ final class BuildModel: ObservableObject {
     /// The minimum the build scripts need. /usr/bin/python3 is 3.9 on a stock Mac and has none of
     /// the packages; picking it made a build fail with a syntax error deep inside the script
     /// (an f-string only 3.12 can parse) instead of a clear message here.
-    nonisolated static let minPython = (3, 9)
+    ///
+    /// 3.12 is the script's own floor, not a guess: build_ipa_from_nsp.py:1911 raises "Direct
+    /// RomFS image builds require Python 3.12 or newer". This said 3.9 — the comment above even
+    /// said 3.12 — so findPython() was happy to return Apple's 3.9 and the build then died inside
+    /// the script with a message the user could not act on (issue #53).
+    nonisolated static let minPython = (3, 12)
 
     /// The interpreter probe: lz4 / capstone / fontTools always, and zstd from either source —
     /// `compression.zstd` is built in from Python 3.14 and `backports.zstd` (which declares
@@ -2354,6 +2439,12 @@ struct BuilderView: View {
             if m.repoOK, !m.repoIsGit {
                 Text(m.t("repo.noGit")).font(.manrope(12)).foregroundStyle(.secondary)
                     .padding(.horizontal, 18).padding(.bottom, 12)
+            }
+            if m.repoOK, m.repoIsGit {
+                divider
+                row(m.t("repo.auto"), detail: m.t("repo.autoNote")) {
+                    Toggle("", isOn: $m.autoUpdateRepo).labelsHidden().toggleStyle(LauncherSwitchStyle())
+                }
             }
             divider
             Button(action: { withAnimation(.easeInOut(duration: 0.18)) { m.toggleDeps() } }) {

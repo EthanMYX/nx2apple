@@ -100,11 +100,15 @@ jobs:
           # app's updater looks for its own asset name and, inside it, its own bundle name, then
           # swaps the new app in at its own path. The bundle keeps working under any name (the
           # executable and Info.plist do not name it), so a copy of the tree is enough.
+          # The zip's name is hyphenated ("NS-Port-Builder-macOS-arm64.zip"); only the bundle
+          # inside keeps the space. Using one variable for both produced "NS Port Builder-macOS-
+          # arm64.zip", which the upload step then could not find (the v0.4.8 release build).
           for legacy in nxnative "NS Port Builder"; do
+            zname=$(printf '%s' "$legacy" | tr ' ' '-')
             rm -rf "legacy-$legacy"
             mkdir -p "legacy-$legacy"
             ditto "$APP" "legacy-$legacy/$legacy.app"
-            (cd "legacy-$legacy" && ditto -c -k --keepParent "$legacy.app" "../${legacy}-macOS-arm64.zip")
+            (cd "legacy-$legacy" && ditto -c -k --keepParent "$legacy.app" "../${zname}-macOS-arm64.zip")
           done
           ls -la *.zip
 

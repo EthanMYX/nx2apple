@@ -20,6 +20,9 @@ enum AppUpdate {
         let tag: String
         let url: String
         let digest: String?   // "sha256:<hex>"; nil when the API gave none
+        /// The release body, shown by the update sheet before anything is downloaded: "a new version
+        /// is out" alone told a user nothing about what they would get.
+        var notes: String = ""
     }
 
     /// A release downloaded, verified and unpacked, waiting to be swapped in.

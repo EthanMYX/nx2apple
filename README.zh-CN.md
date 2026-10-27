@@ -107,6 +107,7 @@ NVN-on-Metal、各游戏的 profile 都是上游的工作，本 fork 自动跟�
 
 | 游戏 | 本 fork 验证 | 备注 |
 |---|---|---|
+| 2026-10-27 | v0.4.8 | **Mac 启动器真正可用了**：把 iPhone 版装到配对设备（#28）、手柄导航整个启动器（#56）、启动选项分基础/高级（#54）并加上显示模式与真实像素的 Render scale（#55）、Mods 区走 `DM_ROMFS_OVERLAY`（#57）、键位与手柄按钮可自定义（#39）；**启动时自动更新构建工具**（#60），**新版本会先说明改了什么**再让你决定；修复：每一款游戏的每一次重写都会崩（`patch_nso.py` 的 `TEXT_LO` 先用后定义，#59）、Mac 版建什么都报「需要 Python 3.12」（#53）、一个文件夹多款游戏时一款都建不了（#58）、构建失败指向窗口外的日志（#52）、Windows 中文系统显示英文界面、CI 建不了 issue |
 | **塞尔达传说：王国之泪** | ✅ | 304,243 个文件 → 127 片，逐字节校验 |
 | **Hades II** | ✅ | 33 个文件的归档 |
 | **集合啦！动物森友会** | ✅ | 103,645 个文件 → 72 片，流畅运行 |
@@ -254,7 +255,7 @@ Homebrew 工具和 Python 包，然后打 IPA。
 ```bash
 git clone https://github.com/<you>/NX2Apple.git
 cd NX2Apple
-brew install xcodegen zstd spirv-cross
+brew install xcodegen zstd spirv-cross glslang   # glslang: OpenGL (LÖVE) games only
 brew install --cask dotnet-sdk
 python3 -m pip install lz4 capstone fonttools backports.zstd
 ```
