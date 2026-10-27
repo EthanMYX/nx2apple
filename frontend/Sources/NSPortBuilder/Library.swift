@@ -67,8 +67,12 @@ struct LaunchSetting: Decodable, Identifiable {
     var level: String? = nil
     /// The 3D views' base size the setting scales, docked and handheld ([width, height]); the render scale's row shows pixels with it.
     var base: [String: [Int]]? = nil
+    /// `<VAR>=<value>` (schema 1, optional): the row is a sub-setting, shown only while the row that sets <VAR> has that value.
+    var needs: String? = nil
     /// The value that leaves the variable unset (DM_FULLSCREEN is on when it is set at all).
     var unsetValue: String? = nil
+    /// A setting this launcher adds itself (launcher.json has no row for it) is not a saved choice: the store has no rule for it.
+    var storeBacked: Bool { unsetValue == nil }
     var id: String { env }
     var sectionTitle: String { section ?? "Game" }
     /// The rows the sheet shows first, as seedds/nxnative#374 groups them; the rest are under Advanced settings.
@@ -82,21 +86,21 @@ struct LaunchSetting: Decodable, Identifiable {
     func accepts(_ v: String) -> Bool {   // a saved choice the build still offers
         switch kind {
         case "choice": return options?.contains { $0.first == v } ?? false
-        case "range":
-            guard let n = Double(v), n.isFinite, let lo = min, let hi = max else { return false }
+        case "range":   // as dm/mac/launcher.c: no leading space, no hex, no NaN
+            guard !v.isEmpty, !(v.first?.isWhitespace ?? true), !v.contains("x"), !v.contains("X"),
+                  let n = Double(v), n.isFinite, let lo = min, let hi = max else { return false }
             return n >= lo && n <= hi
         case "toggle": return v == onValue || v == offValue
         default: return true
         }
     }
-    enum CodingKeys: String, CodingKey { case env, kind, label, note, def = "default", section, options, min, max, step, on, off, level, base }
+    enum CodingKeys: String, CodingKey { case env, kind, label, note, def = "default", section, options, min, max, step, on, off, level, base, needs }
 
-    private struct File: Decodable { let settings: [LaunchSetting] }
-    /// The settings a Mac app was packed with; nil for an app packed before they were.
+    /// The settings a Mac app was packed with; nil for an app packed before they were (see LaunchList for the schema).
     static func read(app: String) -> [LaunchSetting]? {
         let url = URL(fileURLWithPath: app).appendingPathComponent("Contents/Resources/dm/launcher.json")
         guard let data = try? Data(contentsOf: url) else { return nil }
-        return (try? JSONDecoder().decode(File.self, from: data))?.settings
+        return LaunchList.parse(data)?.settings
     }
 
     /// The app's settings as the Mac shows them: the Mac-only Display mode added when the list has none (the host reads
@@ -168,15 +172,17 @@ struct GameMod: Identifiable, Equatable {
 }
 
 extension LibraryGame {
-    /// The value each setting takes: the player's choice while the build still offers it, else the game's default.
+    /// The value of a setting this launcher keeps itself (not a saved choice): the player's choice while the build still offers it,
+    /// else the game's default. Saved choices are read through SavedChoices.
     func launchValue(_ s: LaunchSetting) -> String {
         launchOptions[s.env].flatMap { s.accepts($0) ? $0 : nil } ?? s.def
     }
 
-    /// Every setting goes into the app's environment, as the iPhone launcher sets them before the game starts; one at
-    /// its unset value (Display mode: Window) stays out.
+    /// The launch overrides of the settings only this launcher has (Display mode); one at its unset value (Window) stays out.
+    /// The rows of launcher.json are saved choices (SavedChoices) and are not passed: the app reads them itself, and a value here
+    /// would override a choice made elsewhere.
     func launchEnvironment(_ settings: [LaunchSetting]) -> [String: String] {
-        Dictionary(uniqueKeysWithValues: settings.compactMap { s in
+        Dictionary(uniqueKeysWithValues: settings.filter { !$0.storeBacked }.compactMap { s in
             let v = launchValue(s)
             return s.unsetValue == v ? nil : (s.env, v)
         })
@@ -421,6 +427,19 @@ final class GameLibrary: ObservableObject {
         game.mods.removeAll { $0 == name }
         if on { game.mods.append(name) }
         upsert(game)
+    }
+
+    /// The one-time move of the launch options an earlier version kept in the library file into each app's preferences domain
+    /// (SavedChoices.migrate). The field stays decoded so an old library file loads; what is left in it is only what the store
+    /// has no row for. Runs for every game that has options and an app with a settings list; a game without one waits.
+    func migrateLaunchOptions() {
+        var changed = false
+        for i in games.indices where !games[i].launchOptions.isEmpty && !games[i].appPath.isEmpty {
+            guard let settings = LaunchSetting.read(app: games[i].appPath) else { continue }
+            let store = SavedChoices(app: games[i].appPath, titleID: games[i].titleID)
+            for env in store.migrate(games[i].launchOptions, settings: settings) { games[i].launchOptions[env] = nil; changed = true }
+        }
+        if changed { save() }
     }
 
     func resetLaunchOptions(for id: UUID) {

@@ -3,19 +3,27 @@ import SwiftUI
 
 /// A game's launch options: the settings its Mac app was packed with (dm/launcher.json), drawn as the
 /// iPhone launcher draws them, grouped by section. The basic settings come first, then the game's mods, and the rest
-/// under Advanced settings. Play passes them to the app as its environment.
+/// under Advanced settings. A row of the list is a saved choice in the app's own preferences domain (SavedChoices.swift), which the
+/// app reads at every start; Play passes only the launch overrides (what the list has no row for, the mods) as its environment.
 struct LaunchOptionsView: View {
     @ObservedObject var m: BuildModel
     @ObservedObject var library: GameLibrary
     let gameID: UUID
     @Environment(\.dismiss) private var dismiss
     @State private var advancedOpen = false
+    @State private var choicesRevision = 0   // bumped by a change: the values are read from the store again
     @State private var modsRevision = 0   // bumped by Refresh: the folder is read again
     @EnvironmentObject private var focus: PadFocus
 
     private var game: LibraryGame? { library.games.first { $0.id == gameID } }
     private var settings: [LaunchSetting]? {
         game.flatMap { LaunchSetting.forMac(app: $0.appPath, titleID: $0.titleID, repo: m.repoPath, labels: m.t) }
+    }
+    private var store: SavedChoices? { game.map { SavedChoices(app: $0.appPath, titleID: $0.titleID) } }
+    /// A saved choice for a row of the list, else the tested default; what only this launcher has comes from the library.
+    private func value(_ s: LaunchSetting, _ game: LibraryGame) -> String {
+        _ = choicesRevision
+        return s.storeBacked ? (store?.current(s) ?? s.def) : game.launchValue(s)
     }
     private var modsFolder: URL? { game.map { GameMod.folder(for: $0, library: library.folder) } }
     private var mods: [GameMod] {
@@ -25,6 +33,7 @@ struct LaunchOptionsView: View {
     }
 
     var body: some View {
+        let _ = choicesRevision
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -72,10 +81,10 @@ struct LaunchOptionsView: View {
             HStack(spacing: 14) {
                 Text(m.t("launch.applied")).font(.manrope(12)).foregroundStyle(.secondary).lineLimit(2)
                 Spacer(minLength: 8)
-                if let game, !game.launchOptions.isEmpty {
-                    Button(m.t("launch.reset")) { library.resetLaunchOptions(for: gameID) }
+                if let game, let settings, !game.launchOptions.isEmpty || (store?.hasChoices(settings) ?? false) {
+                    Button(m.t("launch.reset")) { reset(settings) }
                         .buttonStyle(LauncherSecondaryButtonStyle())
-                        .padTarget("opt.reset", scope: "launch") { library.resetLaunchOptions(for: gameID) }
+                        .padTarget("opt.reset", scope: "launch") { reset(settings) }
                 }
                 Button { dismiss() } label: {
                     Text(m.t("launch.done")).font(.manrope(13.5, .bold)).foregroundStyle(.black)
@@ -88,6 +97,7 @@ struct LaunchOptionsView: View {
             .padding(.horizontal, 30).padding(.vertical, 16)
         }
         .padScope("launch", focus)
+        .onAppear { library.migrateLaunchOptions() }
         .frame(width: 600, height: 700)
         .background(LauncherPalette.background)
         .font(.manrope(13))
@@ -98,10 +108,12 @@ struct LaunchOptionsView: View {
     // ---- groups of settings ----
 
     @ViewBuilder private func groups(_ rows: [LaunchSetting], _ game: LibraryGame, all: [LaunchSetting]) -> some View {
-        ForEach(sections(rows), id: \.self) { section in
-            let inSection = rows.filter { $0.sectionTitle == section }
+        // A sub-setting (needs) is drawn only while its parent has the value; a section left empty is not drawn
+        let shown = rows.filter { $0.isShown(in: all) { value($0, game) } }
+        ForEach(LaunchSetting.orderedSections(shown), id: \.self) { section in
+            let inSection = shown.filter { $0.sectionTitle == section }
             VStack(alignment: .leading, spacing: 10) {
-                heading(m.t("launch.section." + section))
+                heading(sectionName(section))
                 card {
                     ForEach(inSection) { s in
                         row(s, game, all: all)
@@ -124,19 +136,31 @@ struct LaunchOptionsView: View {
 
     private var divider: some View { Divider().opacity(0.25).padding(.leading, 18) }
 
-    private func sections(_ settings: [LaunchSetting]) -> [String] {
-        settings.reduce(into: []) { if !$0.contains($1.sectionTitle) { $0.append($1.sectionTitle) } }
+    /// The translated heading of a section this launcher knows; a section it does not know is drawn under its own name.
+    private func sectionName(_ section: String) -> String {
+        let key = "launch.section." + section
+        let name = m.t(key)
+        return name == key ? section : name
     }
 
-    private func set(_ s: LaunchSetting, _ value: String) { library.setLaunchOption(s, value, for: gameID) }
+    private func set(_ s: LaunchSetting, _ value: String) {
+        if s.storeBacked { store?.set(s, value) } else { library.setLaunchOption(s, value, for: gameID) }
+        choicesRevision += 1
+    }
+
+    private func reset(_ settings: [LaunchSetting]) {
+        store?.reset(settings)
+        library.resetLaunchOptions(for: gameID)
+        choicesRevision += 1
+    }
 
     /// Docked unless the console mode chosen is handheld (DM_OPMODE 0), for the render scale's pixels.
     private func docked(_ game: LibraryGame, _ all: [LaunchSetting]) -> Bool {
-        all.first { $0.env == "DM_OPMODE" }.map { game.launchValue($0) != "0" } ?? true
+        all.first { $0.env == "DM_OPMODE" }.map { value($0, game) != "0" } ?? true
     }
 
     @ViewBuilder private func row(_ s: LaunchSetting, _ game: LibraryGame, all: [LaunchSetting]) -> some View {
-        let value = game.launchValue(s)
+        let value = self.value(s, game)
         let isDocked = docked(game, all)
         let pixels = s.kind == "range" ? s.pixels(scale: Double(value) ?? 1, docked: isDocked) : nil
         HStack(alignment: .center, spacing: 16) {
