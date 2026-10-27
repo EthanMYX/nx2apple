@@ -207,7 +207,7 @@ struct ControlsView: View {
         line(m.t("controls.fn." + button)) {
             LauncherMenuPicker(options: ControlLayout.buttons.map { (value: $0, label: m.t("controls.fn." + $0)) } + [(value: "none", label: m.t("controls.none"))],
                                selection: layout.sends(button), fill: true) { layout.setSends(button, $0) }
-                .frame(width: 140)
+                .frame(width: 168)   // the keyboard rows' width (× and key field), and "Right stick press" fits
         }
     }
 
