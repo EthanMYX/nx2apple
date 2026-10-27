@@ -119,6 +119,7 @@ final class BuildModel: ObservableObject {
     /// Where this build's folder actually is: --work-dir when the checkout has it, else the script's
     /// default under the input folder (issue #5 — an upstream checkout has no --work-dir).
     var effectiveWorkDir = ""
+    var lastBuildCommand: [String] = []   // this session's last build, for Copy diagnostics (Diagnostics.swift)
 
     // ---- Installing on an iPhone or iPad (Xcode with a development certificate) ----
     // Optional: with a paired device and a signing team chosen, the script prepares the game's Xcode project
@@ -825,6 +826,7 @@ final class BuildModel: ObservableObject {
         // script's default, which is the same workDir unless a separate output folder was chosen.
         effectiveWorkDir = hasWorkDir ? workDir : (inputDir as NSString).appendingPathComponent(tidHex + "_build")
         say(String(format: t("msg.running"), py) + " " + args.joined(separator: " "))
+        lastBuildCommand = [py] + args
 
         let p = Process()
         p.executableURL = URL(fileURLWithPath: py)
@@ -2326,6 +2328,8 @@ struct BuilderView: View {
                     }
                 }
             }
+            divider
+            row(m.t("diag.title"), detail: m.t("diag.note")) { DiagnosticsButton(m: m, width: Self.settingsButtonWidth) }
         }
     }
 
