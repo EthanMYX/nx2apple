@@ -278,6 +278,14 @@ enum L10n {
         // ---- dependencies ----
         // ---- Qt front end (frontend-qt): keys the SwiftUI app does not use yet ----
         "build.start": ("开始构建", "Start build"),
+        "notify.doneTitle": ("%@ 构建完成", "%@ is built"),
+        "notify.failedTitle": ("%@ 构建失败", "%@ couldn’t be built"),
+        "notify.forMac": ("用于这台 Mac，已在游戏库中", "For this Mac, in your library"),
+        "notify.forIOS": ("用于 iPhone / iPad", "For iPhone / iPad"),
+        "notify.installedOn": ("已安装到 %@", "Installed on %@"),
+        "settings.notify": ("构建完成时通知", "Notify when a build ends"),
+        "settings.notifyNote": ("仅在 NX2Apple 不在前台时，构建完成或失败都会通知", "When a build finishes or fails while NX2Apple is in the background"),
+        "settings.notifyUnbundled": ("需要 NX2Apple.app：用 swift run 启动时没有通知", "Needs NX2Apple.app: no notifications when started with swift run"),
         "build.cancel": ("取消构建", "Cancel build"),
         "msg.macAppDone": ("Mac App 已生成，可在访达里双击运行", "Mac app ready — double-click it in the Finder"),
         "msg.macAppMissing": ("构建结束但没有找到 .app（仓库里缺 dm/mac/pack_app.py？）",

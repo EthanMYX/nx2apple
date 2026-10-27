@@ -41,6 +41,13 @@ A completed Mac build appears in the collection automatically and can be started
 with **Play**. An iPhone build, by default, offers its unsigned IPA and the
 sideloading and RomFS-copy instructions.
 
+When a build finishes or fails while the app is in the background, a notification
+names the game and the target; clicking it shows the game in the library, or the
+Builds page with the log for a failed build. macOS asks for permission when the
+first build starts, and **Settings → App** turns it off. Notifications need the
+app bundle: started with `swift run` the launcher has no bundle identifier, and
+there are none.
+
 ## Install on an iPhone or iPad
 
 With Xcode, a development certificate (sign in to Xcode with your Apple ID under

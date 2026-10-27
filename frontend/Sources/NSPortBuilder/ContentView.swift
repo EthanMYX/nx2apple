@@ -2041,6 +2041,7 @@ struct BuilderView: View {
     var onChooseLibraryFolder: () -> Void = {}
     var onOpenControls: () -> Void = {}
     var controlChanges = 0
+    @AppStorage(BuildNotice.defaultsKey) private var notifyBuilds = true   // BuildNotifications.swift
     @State private var extrasOpen = false
     @State private var logOpen = false
     @State private var keyCheck: KeyCheck.Outcome?   // prod.keys against the chosen files (KeyCheck.swift)
@@ -2376,6 +2377,9 @@ struct BuilderView: View {
             disclosure(m.t("build.log"), isOpen: logOpen) { logOpen.toggle() }
             if logOpen { logView.padding(.horizontal, 14).padding(.bottom, 14) }
         }
+        .onReceive(BuildNotifier.shared.$showLog) { show in   // a clicked notification of a failed build
+            if show { logOpen = true; DispatchQueue.main.async { BuildNotifier.shared.showLog = false } }
+        }
     }
 
     private var logView: some View {
@@ -2481,6 +2485,12 @@ struct BuilderView: View {
                 }
                 .frame(width: Self.settingsButtonWidth)
                 .padTarget("set.language", scope: "main", activate: { cycleLanguage(1) }, adjust: { cycleLanguage($0) })
+            }
+            divider
+            // Build notifications (BuildNotifications.swift): none without an app bundle, e.g. under swift run
+            row(m.t("settings.notify"), detail: m.t(BuildNotice.hasBundleID ? "settings.notifyNote" : "settings.notifyUnbundled")) {
+                Toggle("", isOn: $notifyBuilds).toggleStyle(LauncherSwitchStyle()).labelsHidden().disabled(!BuildNotice.hasBundleID)
+                    .padTarget("set.notify", scope: "main") { notifyBuilds.toggle() }
             }
             divider
             row("NX2Apple", detail: String(format: m.t("app.version"), BuildModel.appVersion),
