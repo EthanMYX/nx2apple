@@ -33,7 +33,7 @@ def repo_numbers() -> tuple[int, int]:
 TEXT = {
     'en': {
         'out': 'hero-features-en.png',
-        'title': ('Switch games,', 'on your iPhone.'),
+        'title': ('Switch games,', 'on iPhone and Mac.'),
         'lead': 'Not an emulator. No terminal.<br>A Mac app does the whole build in a few clicks.',
         'stats': ['game profiles', 'verified on iPhone', 'files → 127 shards'],
         'cards': [
@@ -45,7 +45,7 @@ TEXT = {
     },
     'zh': {
         'out': 'hero-features.png',
-        'title': ('Switch 游戏，', '装进 iPhone。'),
+        'title': ('Switch 游戏，', '装进 iPhone 和 Mac。'),
         'lead': '不是模拟器 · 不用命令行<br>一个 macOS App 点几下就完成构建',
         'stats': ['款游戏 profile', '款 iPhone 实测', '文件 → 127 分片'],
         'cards': [
