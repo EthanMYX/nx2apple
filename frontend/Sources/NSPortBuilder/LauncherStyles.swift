@@ -19,11 +19,15 @@ struct LauncherWindowChrome: NSViewRepresentable {
 struct LauncherSecondaryButtonStyle: ButtonStyle {
     /// Text and border in this colour (the build bar's Stop); plain white otherwise.
     var accent: Color? = nil
+    /// At least this wide, the label centred: the buttons of a card line up in one column (Settings).
+    var minWidth: CGFloat? = nil
     @Environment(\.isEnabled) private var enabled
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.manrope(13, .semibold))
+            .lineLimit(1)
             .padding(.horizontal, 15).padding(.vertical, 9)
+            .frame(minWidth: minWidth)
             .background(Color.white.opacity(configuration.isPressed ? 0.13 : 0.055), in: RoundedRectangle(cornerRadius: 9))
             .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(accent?.opacity(0.75) ?? Color.white.opacity(0.10)))
             .foregroundStyle(enabled ? (accent ?? Color.white.opacity(0.92)) : .gray)
@@ -52,7 +56,14 @@ struct LauncherSwitchStyle: ToggleStyle {
     }
 }
 
-/// Two or three choices side by side; the chosen one is a cream pill.
+/// The width of a launch option's control (choices, list, slider with its value), so the controls of a card line up
+/// in one column whatever their labels.
+enum LaunchControl {
+    static let width: CGFloat = 220
+}
+
+/// Two or three choices side by side; the chosen one is a cream pill. Each choice takes an equal share of the width
+/// it is given.
 struct LauncherSegmented: View {
     let options: [(value: String, label: String)]
     let selection: String
@@ -64,7 +75,9 @@ struct LauncherSegmented: View {
                 Button { withAnimation(.easeOut(duration: 0.15)) { choose(o.value) } } label: {
                     Text(o.label).font(.manrope(12.5, on ? .bold : .medium))
                         .foregroundStyle(on ? Color.black : Color.white.opacity(0.75))
+                        .lineLimit(1).minimumScaleFactor(0.85)
                         .padding(.horizontal, 12).padding(.vertical, 6)
+                        .frame(maxWidth: .infinity)
                         .background(on ? LauncherPalette.cream : .clear, in: Capsule())
                         .contentShape(Capsule())
                 }
@@ -78,19 +91,23 @@ struct LauncherSegmented: View {
     }
 }
 
-/// A longer list of choices: a pill with the current one that opens the list.
+/// A longer list of choices: a pill with the current one that opens the list. With `fill` it takes the width it is
+/// given, the chevron at its right end.
 struct LauncherMenuPicker: View {
     let options: [(value: String, label: String)]
     let selection: String
+    var fill = false
     let choose: (String) -> Void
     @State private var open = false
     var body: some View {
         Button { open.toggle() } label: {
             HStack(spacing: 8) {
-                Text(options.first { $0.value == selection }?.label ?? selection).font(.manrope(12.5, .semibold))
+                Text(options.first { $0.value == selection }?.label ?? selection).font(.manrope(12.5, .semibold)).lineLimit(1)
+                if fill { Spacer(minLength: 0) }
                 Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary)
             }
             .padding(.horizontal, 14).padding(.vertical, 7)
+            .frame(maxWidth: fill ? .infinity : nil)
             .background(Color.white.opacity(0.06), in: Capsule())
             .overlay(Capsule().strokeBorder(Color.white.opacity(0.10)))
             .contentShape(Capsule())

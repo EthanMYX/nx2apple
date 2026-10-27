@@ -58,6 +58,18 @@ environment. Only a choice that differs from the game's tested default is kept, 
 library manifest; **Reset to tested defaults** forgets them. An app without the list
 shows none. Starting the app from Finder uses its defaults.
 
+## Controls
+
+**Settings → Controls → Customize…** sets the keys and controller buttons for every game.
+For a key, click its field and press the new key (Esc keeps the old one, × leaves the
+function on no key). One key holds one function, so the function that had the key before
+is left on none, as in the host. For a controller button, choose the button it sends
+(A and B swapped, for example). The right stick has no keys by default and can get some
+here. **Play** passes only the changes, as `DM_KEYMAP` and `DM_PAD_MAP`
+(`dm/host/input_map.h`; the engine change is
+[seedds/nxnative#386](https://github.com/seedds/nxnative/pull/386), so a sync from
+upstream brings it). A build without it ignores them and uses the default keys.
+
 ## Artwork
 
 The launcher shows, in this order: a custom image chosen under **Manage > Change

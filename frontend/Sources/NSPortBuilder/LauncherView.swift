@@ -34,6 +34,8 @@ struct ContentView: View {
     @State private var launchError: String?
     @State private var removing: LibraryGame?
     @State private var optionsFor: UUID?
+    @State private var controlsOpen = false
+    @StateObject private var controls = ControlLayout()
     @StateObject private var row = RowScroller()
     private var performStartupChecks: Bool
     @Environment(\.scenePhase) private var scenePhase
@@ -60,7 +62,8 @@ struct ContentView: View {
                 libraryPage
             } else {
                 BuilderView(m: m, library: library, settings: page == .settings, onViewGame: { page = .library },
-                            onOpenSettings: { page = .settings }, onChooseLibraryFolder: chooseLibraryFolder)
+                            onOpenSettings: { page = .settings }, onChooseLibraryFolder: chooseLibraryFolder,
+                            onOpenControls: { controlsOpen = true }, controlChanges: controls.changeCount)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             if m.running || page == .library { activityBar }
@@ -118,6 +121,7 @@ struct ContentView: View {
         .sheet(isPresented: Binding(get: { optionsFor != nil }, set: { if !$0 { optionsFor = nil } })) {
             if let id = optionsFor { LaunchOptionsView(m: m, library: library, gameID: id) }
         }
+        .sheet(isPresented: $controlsOpen) { ControlsView(m: m, layout: controls) }
     }
 
     private var topBar: some View {
@@ -469,7 +473,10 @@ struct ContentView: View {
             launching = true
             let configuration = NSWorkspace.OpenConfiguration()
             // The launch options; the app's launcher (dm/mac/launcher.c) keeps a variable that is already set.
-            if let settings = LaunchSetting.read(app: game.appPath) { configuration.environment = game.launchEnvironment(settings) }
+            // The keyboard and controller layout (Settings → Controls) goes to every game; a build whose host does not read it plays with the default keys.
+            var environment = controls.environment
+            if let settings = LaunchSetting.read(app: game.appPath) { environment.merge(game.launchEnvironment(settings)) { _, own in own } }
+            if !environment.isEmpty { configuration.environment = environment }
             NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: game.appPath), configuration: configuration) { _, error in
                 DispatchQueue.main.async {
                     launching = false

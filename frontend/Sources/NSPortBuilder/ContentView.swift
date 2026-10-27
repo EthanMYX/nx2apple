@@ -1479,6 +1479,8 @@ struct BuilderView: View {
     var onViewGame: () -> Void = {}
     var onOpenSettings: () -> Void = {}
     var onChooseLibraryFolder: () -> Void = {}
+    var onOpenControls: () -> Void = {}
+    var controlChanges = 0
     @State private var extrasOpen = false
     @State private var logOpen = false
 
@@ -1815,8 +1817,15 @@ struct BuilderView: View {
 
     // ---- Settings ----
 
+    /// Every button of the Settings cards is this wide, so they stand in one column.
+    static let settingsButtonWidth: CGFloat = 150
+
     @ViewBuilder private var settingsPage: some View {
         pageHeading(m.t("settings.heading"), note: m.t("settings.note"))
+        settingsCards.buttonStyle(LauncherSecondaryButtonStyle(minWidth: Self.settingsButtonWidth))
+    }
+
+    @ViewBuilder private var settingsCards: some View {
         group(m.t("section.library"), footnote: m.t("library.folderHint")) {
             row(m.t("library.folderTitle"), detail: library.folder.isEmpty ? m.t("library.folderUnset") : m.shortPath(library.folder),
                 dot: library.folder.isEmpty ? LauncherPalette.unbuilt : LauncherPalette.ready, help: library.folder) {
@@ -1825,6 +1834,11 @@ struct BuilderView: View {
                     Button(m.t("library.rescan")) { library.discover() }.disabled(library.scanning)
                 }
                 Button(m.t("library.chooseFolder"), action: onChooseLibraryFolder)
+            }
+        }
+        group(m.t("section.controls"), footnote: m.t("controls.settingsHint")) {
+            row(m.t("controls.row"), detail: controlChanges == 0 ? m.t("controls.defaultLayout") : String(format: m.t("controls.changes"), controlChanges)) {
+                Button(m.t("controls.customize"), action: onOpenControls)
             }
         }
         tools
