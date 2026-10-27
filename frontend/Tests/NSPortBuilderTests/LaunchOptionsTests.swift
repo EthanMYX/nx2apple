@@ -1,7 +1,7 @@
 import XCTest
 @testable import NSPortBuilder
 
-/// Launch options beyond the app's own list: Display mode, the basic / advanced split and the render scale in pixels.
+/// Launch options beyond the app's own list: Display mode, the basic / advanced split, the render scale in pixels, and mods.
 final class LaunchOptionsTests: XCTestCase {
     private var temporary: URL!
 
@@ -58,4 +58,23 @@ final class LaunchOptionsTests: XCTestCase {
                      "without render_base the row stays in percent")
     }
 
+    func testModsAreFoundInTheirLayoutsAndPassedInListOrder() throws {
+        var game = LibraryGame(titleID: "01007EF00011E000", name: "Zelda")
+        let folder = GameMod.folder(for: game, library: temporary.path)
+        let fm = FileManager.default
+        for path in ["B Plain/Actor/x.bin", "A Romfs/romfs/Actor/y.bin", "C Atmosphere/atmosphere/contents/01007EF00011E000/romfs/z.bin", "D Code/exefs/main.npdm"] {
+            let file = folder.appendingPathComponent(path)
+            try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data([1]).write(to: file)
+        }
+        let mods = GameMod.list(in: folder, titleID: game.titleID)
+        XCTAssertEqual(mods.map(\.name), ["A Romfs", "B Plain", "C Atmosphere", "D Code"])
+        XCTAssertEqual(mods.map(\.usable), [true, true, true, false])
+        XCTAssertEqual(game.modEnvironment(mods), [:])
+        game.mods = ["C Atmosphere", "D Code", "A Romfs"]
+        XCTAssertEqual(game.modEnvironment(mods)["DM_ROMFS_OVERLAY"],
+                       [folder.appendingPathComponent("A Romfs/romfs").path,
+                        folder.appendingPathComponent("C Atmosphere/atmosphere/contents/01007EF00011E000/romfs").path].joined(separator: ":"),
+                       "the list's order (higher wins), and a code-only mod left out")
+    }
 }

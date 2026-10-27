@@ -14,6 +14,7 @@ struct LibraryGame: Codable, Identifiable, Equatable {
     var outputDirectory = ""
     var artworkPath = ""
     var launchOptions: [String: String] = [:]
+    var mods: [String] = []   // the mods (folder names in the game's mods folder) switched on
     var iosAppPath = ""
     var installedDevice = ""
 
@@ -45,6 +46,7 @@ extension LibraryGame {
         outputDirectory = try c.decodeIfPresent(String.self, forKey: .outputDirectory) ?? ""
         artworkPath = try c.decodeIfPresent(String.self, forKey: .artworkPath) ?? ""
         launchOptions = try c.decodeIfPresent([String: String].self, forKey: .launchOptions) ?? [:]
+        mods = try c.decodeIfPresent([String].self, forKey: .mods) ?? []
         iosAppPath = try c.decodeIfPresent(String.self, forKey: .iosAppPath) ?? ""
         installedDevice = try c.decodeIfPresent(String.self, forKey: .installedDevice) ?? ""
     }
@@ -128,6 +130,40 @@ struct LaunchSetting: Decodable, Identifiable {
     }
 }
 
+/// A folder in the game's mods folder: RomFS files that replace the game's own (DM_ROMFS_OVERLAY, hle_fs.c). The files are
+/// found in <mod>/romfs, in an Atmosphère layout (<mod>/atmosphere/contents/<title ID>/romfs, <mod>/contents/<title ID>/romfs)
+/// or in the folder itself. A mod with only exefs/ changes the game's code, which the rewriter does not take: listed, not usable.
+struct GameMod: Identifiable, Equatable {
+    let name: String
+    let romfs: String?
+    var id: String { name }
+    var usable: Bool { romfs != nil }
+
+    static func folder(for game: LibraryGame, library: String) -> URL {
+        let root = library.isEmpty
+            ? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("NS Port Builder")
+            : URL(fileURLWithPath: library)
+        return root.appendingPathComponent("mods").appendingPathComponent(game.titleID)
+    }
+
+    static func list(in folder: URL, titleID: String) -> [GameMod] {
+        let fm = FileManager.default
+        let names = ((try? fm.contentsOfDirectory(atPath: folder.path)) ?? []).filter { !$0.hasPrefix(".") }.sorted {
+            $0.localizedStandardCompare($1) == .orderedAscending
+        }
+        return names.compactMap { name in
+            var dir: ObjCBool = false
+            let mod = folder.appendingPathComponent(name)
+            guard fm.fileExists(atPath: mod.path, isDirectory: &dir), dir.boolValue else { return nil }
+            let candidates = ["romfs", "atmosphere/contents/\(titleID)/romfs", "contents/\(titleID)/romfs"].map { mod.appendingPathComponent($0).path }
+            if let found = candidates.first(where: { fm.fileExists(atPath: $0) }) { return GameMod(name: name, romfs: found) }
+            let top = ((try? fm.contentsOfDirectory(atPath: mod.path)) ?? []).filter { !$0.hasPrefix(".") }
+            let codeOnly = top.allSatisfy { ["exefs", "atmosphere", "contents"].contains($0.lowercased()) } && !top.isEmpty
+            return GameMod(name: name, romfs: codeOnly || top.isEmpty ? nil : mod.path)
+        }
+    }
+}
+
 extension LibraryGame {
     /// The value each setting takes: the player's choice while the build still offers it, else the game's default.
     func launchValue(_ s: LaunchSetting) -> String {
@@ -143,6 +179,12 @@ extension LibraryGame {
         })
     }
 
+    /// DM_ROMFS_OVERLAY for the mods switched on that can be used, in the list's order: where two replace one file, the
+    /// one higher in the list wins (the host looks in the folders in order).
+    func modEnvironment(_ available: [GameMod]) -> [String: String] {
+        let paths = available.filter { mods.contains($0.name) }.compactMap(\.romfs)
+        return paths.isEmpty ? [:] : ["DM_ROMFS_OVERLAY": paths.joined(separator: ":")]
+    }
 }
 
 struct MacGameBundle {
@@ -349,6 +391,14 @@ final class GameLibrary: ObservableObject {
     func setLaunchOption(_ setting: LaunchSetting, _ value: String, for id: UUID) {
         guard var game = games.first(where: { $0.id == id }) else { return }
         game.launchOptions[setting.env] = setting.isDefault(value) ? nil : value
+        upsert(game)
+    }
+
+    /// A mod switched on or off for one game.
+    func setMod(_ name: String, on: Bool, for id: UUID) {
+        guard var game = games.first(where: { $0.id == id }) else { return }
+        game.mods.removeAll { $0 == name }
+        if on { game.mods.append(name) }
         upsert(game)
     }
 
