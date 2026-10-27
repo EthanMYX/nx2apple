@@ -2496,6 +2496,14 @@ struct BuilderView: View {
                         m.openOnDevice(udid: m.installedOn, app: m.installedAppPath) { error in if let error { m.doneNote = error } }
                     }
                 }
+                // The game files were copied (or, after a skipped transfer, await a manual copy — a
+                // fast external drive handed to the device is quicker than USB): show where they are.
+                if !m.archivePath.isEmpty {
+                    divider
+                    row(m.t("dev.gameData"), detail: m.shortPath(m.archivePath), dot: LauncherPalette.ready, help: m.archivePath) {
+                        Button(m.t("install.reveal")) { reveal(m.archivePath) }
+                    }
+                }
             }
         } else if m.done && m.target != "mac-app" {
             group(m.t("install.title")) {

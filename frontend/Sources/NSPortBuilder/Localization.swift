@@ -108,6 +108,7 @@ enum L10n {
         "dev.transferNow": ("传输", "Transfer"),
         "dev.transferSkip": ("暂不传输", "Not now"),
         "dev.copySkipped": ("已安装到 %@；游戏文件未传输", "Installed on %@; the game files were not transferred"),
+        "dev.gameData": ("游戏数据（romfs.img）", "Game data (romfs.img)"),
         "dev.installed": ("\u{5df2}\u{5b89}\u{88c5}\u{5230} %@", "Installed on %@"),
         "dev.installedNote": ("\u{6e38}\u{620f}\u{5df2}\u{5728}\u{8bbe}\u{5907}\u{4e0a}\u{ff0c}\u{53ef}\u{4ee5}\u{76f4}\u{63a5}\u{6253}\u{5f00}\u{3002}", "The game is on the device, ready to open."),
         "dev.open": ("\u{5728} %@ \u{4e0a}\u{6253}\u{5f00}", "Open on %@"),
