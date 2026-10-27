@@ -63,7 +63,7 @@ OURS = {'dm/host/romfs_arc.c', 'dm/host/romfs_arc.h', 'dm/tools/romfs_arc.py',
 PATCHED = ('dm/host/hle_fs.c', 'dm/host/Makefile', 'dm/host/tests/Makefile', 'dm/ios/tools/build_ipa.sh',
            'scripts/build_ipa_from_nsp.py', 'dm/gfx/tools/shader_split.py',
            'dm/ios/Sources/main.m', 'dm/gfx/nvn/nvn_mtl.m', 'dm/host/dm.h',
-           'dm/ios/tests/test_romfs_startup.py', 'dm/ios/tests/test_profile_pack.py', 'docs/env_switches.tsv')
+           'dm/ios/tests/test_romfs_startup.py', 'dm/ios/tests/test_profile_pack.py', 'docs/env_switches.tsv', 'dm/host/front_mac.m', 'dm/tools/patch_nso.py', 'dm/games/0100A00019DE0000/game.tsv')
 
 def git(*a):
     r = subprocess.run(['git', *a], cwd=REPO, capture_output=True, text=True)
@@ -939,38 +939,23 @@ def patch_main_m(t):
     return t
 
 def patch_patch_nso(t):
-    """The NRO header skip in dm/tools/patch_nso.py (issue #14).
+    """The NRO header skip in dm/tools/patch_nso.py (issue #14), as sent upstream in seedds/nxnative#397.
 
-    An NRO file is the image itself preceded by a 0x80-byte header, so its text segment starts at
-    0x80; an NSO's starts at 0 after decompression. The scan and CODE_RANGES assumed 0, so on an
-    NRO the header's build ID was decoded as instructions and reported as a site
-    ("44 ldr x18, #0xfffffffffff40370" on Final Fantasy X/X-2 HD Remaster), and the last 0x80
-    bytes of text were never scanned.
-
-    This was fixed once (4b863234) and then silently reverted: patch_nso.py was not a carrier, so
-    the next sync that rewrote it took upstream's version, and the fork's test kept failing from
-    then on. It is a carrier now.
+    An NRO's text segment starts at offset 0 with the file's own header in it (Hades' EOSSDK-Switch-Shipping.nro: text
+    {0x0, 0xa41000}), so scanning it from 0 read the header's build ID as instructions ("44 ldr x18, #0xfffffffffff40370" on
+    Final Fantasy X/X-2 HD Remaster). code_start() is 0x80 for an NRO and 0 for an NSO; code_ranges() starts no code range
+    before it. The segment table cannot give the bound (it says 0): the TEXT_LO = segs[0][1] form this patcher applied
+    before kept scanning the header, and it used TEXT_LO in the site bound 13 lines before defining it, so every rewrite
+    stopped with a NameError. When #397 is merged upstream, every hunk is found applied and this patcher can go.
     """
-    if 'TEXT_LO = segs[0][1]' in t: return skip('patch_nso.py NRO header (already patched)')
+    if 'def code_start(d):' in t and 'TEXT_LO' not in t: return skip('patch_nso.py NRO header (already patched)')
     P = [
-        ('data blocks and code ranges',
-         'DATA_BLOCKS = nso_code.data_blocks(IMG, TEXT_END, md)\n'
-         'CODE_RANGES = list(zip([0] + [e for _, e in DATA_BLOCKS], [s for s, _ in DATA_BLOCKS] + [TEXT_END]))\n',
-         'DATA_BLOCKS = nso_code.data_blocks(IMG, TEXT_LO + TEXT_END, md, lo=TEXT_LO)\n'
-         '# The text segment starts at its memory offset: 0 for an NSO (the image is rebuilt from 0) and\n'
-         '# 0x80 for an NRO (the file is the image preceded by its header, so text sits at 0x80). Scanning\n'
-         '# an NRO from 0 read the header\'s build ID as instructions and reported\n'
-         '# "44 ldr x18, #0xfffffffffff40370" on Final Fantasy X/X-2 HD Remaster (GitHub issue #14).\n'
-         '# TEXT_LO is where the code really begins in IMG; data_blocks() gets the same lower bound so its\n'
-         '# returned offsets are already IMG-absolute and CODE_RANGES needs no further shift.\n'
-         'TEXT_LO = segs[0][1]\n'
-         'CODE_RANGES = list(zip([TEXT_LO] + [e for _, e in DATA_BLOCKS], [s for s, _ in DATA_BLOCKS] + [TEXT_LO + TEXT_END]))\n'),
+        ('code_start and code_ranges', "src, outdir, NAME = sys.argv[1], sys.argv[2], sys.argv[3]\nd = open(src, 'rb').read()\n",
+         'def code_start(d):\n    """Where the code in the text segment starts: 0x80 in an NRO, 0 in an NSO. An NRO\'s text segment begins at file and memory\n    offset 0 with the file\'s own header in it (the start word, the MOD0 offset, NRO0 at +0x10, the segment table at +0x20, the\n    build ID at +0x40), so scanning it from 0 read the header as instructions: the build ID decoded as "ldr x18, #…" and stopped\n    Final Fantasy X/X-2 HD Remaster\'s rewrite (GitHub issue LNPANDY/NX2Apple#14). An NSO\'s text holds code from 0."""\n    return 0x80 if d[0x10:0x14] == b\'NRO0\' else 0\n\ndef code_ranges(data_blocks, text_end, start=0):\n    """The text\'s code ranges: the gaps between its data blocks (nso_code.data_blocks), none of them before `start` (code_start)"""\n    gaps = zip([0] + [e for _, e in data_blocks], [s for s, _ in data_blocks] + [text_end])\n    return [(max(s, start), e) for s, e in gaps if e > max(s, start)]\n\nsrc, outdir, NAME = sys.argv[1], sys.argv[2], sys.argv[3]\nd = open(src, \'rb\').read()\nCODE_START = code_start(d)\n'),
         ('site starts bound', 'starts = sorted(x for x in starts if x < TEXT_END)',
-         'starts = sorted(x for x in starts if x < TEXT_LO + TEXT_END)'),
-        ('observation gate window', '    for a in range(off, min(off + 4 * 16, TEXT_END), 4):',
-         '    for a in range(off, min(off + 4 * 16, TEXT_LO + TEXT_END), 4):'),
-        ('observation gate assert', '    assert off < TEXT_END and off not in kinds',
-         '    assert off < TEXT_LO + TEXT_END and off not in kinds'),
+         'starts = sorted(x for x in starts if CODE_START <= x < TEXT_END)'),
+        ('code ranges', 'CODE_RANGES = list(zip([0] + [e for _, e in DATA_BLOCKS], [s for s, _ in DATA_BLOCKS] + [TEXT_END]))',
+         'CODE_RANGES = code_ranges(DATA_BLOCKS, TEXT_END, CODE_START)'),
     ]
     for name, old, new in P:
         if new in t:
@@ -978,7 +963,8 @@ def patch_patch_nso(t):
             continue
         if old not in t:
             fail(f'dm/tools/patch_nso.py: patch "{name}" anchor missing (upstream reworked the text '
-                 'scan; merge the NRO header skip by hand)')
+                 'scan; merge the NRO header skip by hand, or take seedds/nxnative#397 if it is merged)')
+            continue
         t = t.replace(old, new, 1)
         done(f'patch_nso.py {name}')
     return t
@@ -1158,7 +1144,7 @@ MARKERS = {
     'dm/games/0100A00019DE0000/game.tsv': 'build	v1	1.0.137848',
     'dm/host/dm.h': 'hle_profile.h',
     'dm/host/front_mac.m': 'DM_KEYMAP',
-    'dm/tools/patch_nso.py': 'TEXT_LO',
+    'dm/tools/patch_nso.py': 'def code_start(d):',
     'dm/ios/tests/test_romfs_startup.py': 'fixture_profile',
     'dm/ios/tests/test_profile_pack.py': 'slim package',
     'docs/env_switches.tsv': 'DM_FULL_ROMFS\t',
