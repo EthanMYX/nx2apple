@@ -420,8 +420,19 @@ class MainWindow(QMainWindow):
                 self.deps_summary.setText('●  ' + self.m.t('dep.allReady'))
                 self.deps_summary.setStyleSheet(f'color: {GREEN}; font-weight: 600;')
             else:
-                n = sum(1 for d in self.m.deps if not d.ok)
-                self.deps_summary.setText(self.m.t('dep.missing', n))
+                # Required only: an optional tool (glslangValidator for OpenGL games) or one that
+                # only some titles need (spirv-cross) was counted here, so a machine that could
+                # build the game in front of it read "缺 3 项" and looked broken.
+                n = sum(1 for d in self.m.deps if not d.ok and getattr(d, 'required', True))
+                optional = sum(1 for d in self.m.deps if not d.ok and not getattr(d, 'required', True))
+                if n == 0 and optional:
+                    # nothing is actually blocking: saying "缺 0 项（另有 2 项可选）" reads like a
+                    # problem where there is none
+                    self.deps_summary.setText(self.m.t('dep.onlyOptional', optional))
+                    self.deps_summary.setStyleSheet(f'color: {GREEN}; font-weight: 600;')
+                    return
+                self.deps_summary.setText(self.m.t('dep.missingOptional', n, optional) if optional
+                                          else self.m.t('dep.missing', n))
                 self.deps_summary.setStyleSheet(f'color: {RED}; font-weight: 600;')
         else:
             self.deps_summary.setText(self.m.t('dep.checking'))
