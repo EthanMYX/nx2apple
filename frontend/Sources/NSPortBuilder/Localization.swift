@@ -304,6 +304,8 @@ enum L10n {
         "repo.pulled": ("已更新到最新", "Updated to the latest"),
         "repo.pullFail": ("更新失败——详情见日志（本地文件被改过？）",
                           "Update failed — see the log (local changes?)"),
+        "repo.pullDiverged": ("这个仓库有自己的提交历史，无法直接更新。点「选择仓库…」指向一个新的 NX2Apple 副本（或删除该文件夹后重新下载）",
+                              "This checkout has its own history and cannot be fast-forwarded. Use Choose repository… to point at a fresh NX2Apple copy (or delete the folder and download again)"),
         "repo.gitInstalling": ("没找到 git，正在自动安装 PortableGit…（约 57 MB，无需管理员权限）",
                                "git not found — installing PortableGit… (about 57 MB, no administrator rights needed)"),
         "repo.gitInstallFail": ("git 自动安装失败：%@——可到 git-scm.com 手动安装",

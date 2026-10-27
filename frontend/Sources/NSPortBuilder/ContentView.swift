@@ -267,31 +267,43 @@ final class BuildModel: ObservableObject {
     }
 
     nonisolated static func findRepo() -> String {
-        if let saved = UserDefaults.standard.string(forKey: "repoPath"), isRepo(saved) { return saved }
+        // A candidate that is merely a repository (an upstream nxnative clone) must lose to one
+        // carrying this fork's `--work-dir`: building from an upstream checkout fails with
+        // "unrecognized arguments" after the app has already picked it — and a saved path from an
+        // earlier session pointed at exactly such a clone, so every build said 仓库不是最新版本
+        // (the report's build log). The fork check is the script's own argparse, not a name match,
+        // so a checkout under any folder name ranks correctly.
+        let saved = UserDefaults.standard.string(forKey: "repoPath").flatMap { isRepo($0) ? $0 : nil }
         var seeds: [String] = []
-        // the app bundle: …/frontend/NS Port Builder.app/Contents/MacOS
+        // the app bundle: …/frontend/NX2Apple.app/Contents/MacOS — the checkout it ships from wins
         let bundle = Bundle.main.bundleURL.standardizedFileURL
         seeds.append(bundle.deletingLastPathComponent().path)
         seeds.append(bundle.deletingLastPathComponent().deletingLastPathComponent()
                          .deletingLastPathComponent().deletingLastPathComponent().path)
         seeds.append(FileManager.default.currentDirectoryPath)
         for base in ["/ZCodeProject/", "/", "/Documents/", "/Desktop/"] {
-            seeds.append(NSHomeDirectory() + base + "nxnative")
-            seeds.append(NSHomeDirectory() + base + "NX2Apple")
-            seeds.append(NSHomeDirectory() + base + "NX2Apple")
             seeds.append(NSHomeDirectory() + base + "nxnative-romfs-archive")   // clones made before the rename still resolve
+            seeds.append(NSHomeDirectory() + base + "NX2Apple")
+            seeds.append(NSHomeDirectory() + base + "nxnative")                 // an upstream clone: last resort
         }
         var seen = Set<String>()
+        var repos: [String] = []
         for s in seeds where !s.isEmpty && seen.insert(s).inserted {
             var d = s
             for _ in 0..<5 {                       // walk up a few levels from each seed
-                if isRepo(d) { return d }
+                if isRepo(d) { repos.append(d); break }
                 let up = (d as NSString).deletingLastPathComponent
                 if up == d || up == "/" { break }
                 d = up
             }
         }
-        return ""
+        let forks = repos.filter { repoSupportsWorkDir($0) }
+        if let saved, repoSupportsWorkDir(saved) { return saved }   // the player's own fork checkout
+        if let f = forks.first, f != saved {
+            if let saved { fputs("launcher: using the fork checkout \(f); the saved repository \(saved) is an upstream clone without --work-dir\n", stderr) }
+            return f
+        }
+        return saved ?? repos.first ?? ""
     }
 
     // ---- Repository download and updates (a clone is the scripts' home; not everyone has git habits) ----
@@ -397,6 +409,14 @@ final class BuildModel: ObservableObject {
 
     /// Fast-forward the checkout to origin/main. The build keeps everything it needs under
     /// <id>_build/ outside the repository, so a pull never disturbs a previous build's files.
+    /// The status line for a failed pull. A diverged checkout ("Not possible to fast-forward") has its
+    /// own commit history — a clone someone worked in, or an old upstream checkout — and no amount of
+    /// pulling fixes that; the actionable answer is the repository picker, which is always offered now.
+    func pullFailureMessage(_ gitOutput: String) -> String {
+        let diverged = gitOutput.contains("fast-forward") || gitOutput.contains("Diverging")
+        return t(diverged ? "repo.pullDiverged" : "repo.pullFail")
+    }
+
     func pullRepo() {
         guard !running, !repoBusy, repoOK, repoIsGit, let git = Self.gitBinary() else { return }
         repoBusy = true; repoStatus = t("repo.pulling")
@@ -409,7 +429,7 @@ final class BuildModel: ObservableObject {
                     self.repoBehind = 0; self.repoStatus = self.t("repo.pulled")
                     if !r.out.isEmpty { self.append(r.out + "\n") }
                 } else {
-                    self.repoStatus = self.t("repo.pullFail")
+                    self.repoStatus = self.pullFailureMessage(r.out)
                     self.append(r.out + "\n")
                 }
             }
@@ -435,7 +455,7 @@ final class BuildModel: ObservableObject {
                     self.repoBehind = 0; self.autoPulled = behind
                     self.repoStatus = String(format: self.t("repo.autoPulled"), behind)
                 } else {
-                    self.repoStatus = self.t("repo.pullFail")
+                    self.repoStatus = self.pullFailureMessage(pulled.out)
                     self.append(pulled.out + "\n")
                 }
             }
@@ -2548,8 +2568,12 @@ struct BuilderView: View {
                         Button(m.t("repo.adopt")) { m.adoptRepoAsGit() }.disabled(m.repoBusy || m.running)
                             .padTarget("set.repoAdopt", scope: "main") { if !(m.repoBusy || m.running) { m.adoptRepoAsGit() } }
                     }
-                } else {
-                    Button(m.t("repo.choose")) { pickRepo() }
+                }
+                // Always offered, including when a repository is already configured: a saved path from
+                // an earlier session (an upstream clone, a moved folder) is exactly the state a user
+                // cannot fix without this button — the report had no way to leave the wrong repository.
+                Button(m.t("repo.choose")) { pickRepo() }
+                if !m.repoOK {
                     Button(m.t("repo.download")) { m.cloneRepo() }.disabled(m.repoBusy || m.running)
                 }
             }
