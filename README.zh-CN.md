@@ -1,6 +1,9 @@
 <div align="center">
 
-# NX2Apple
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="frontend/screenshots/logo-dark.png">
+  <img src="frontend/screenshots/logo-light.png" width="360" alt="NX2Apple, by nxnative">
+</picture>
 
 **你的 Switch 游戏，跑在你的 iPhone 上。**
 
@@ -16,12 +19,7 @@
 [![English](https://img.shields.io/badge/🇺🇸_English-available-green)](README.md)
 [![简体中文](https://img.shields.io/badge/🇨🇳_简体中文-当前-blue)](README.zh-CN.md)
 
-<img src="frontend/screenshots/hero-features.png" width="100%" alt="NX2Apple — Switch 游戏装进 iPhone">
-
-> **v0.4.5 新增**
->
-> - 可输出 Mac App
-> - 支持老的 iPhone 和 iPad，构建时开启 BC 纹理
+<img src="frontend/screenshots/hero-features.png" width="100%" alt="NX2Apple — Switch 游戏装进 iPhone 和 Mac">
 
 
 一个 macOS App 拿你自己导出的游戏文件，点几下就把整件事做完——解包、为 Apple 芯片重写游戏代码、把

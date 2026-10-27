@@ -1,6 +1,9 @@
 <div align="center">
 
-# NX2Apple
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="frontend/screenshots/logo-dark.png">
+  <img src="frontend/screenshots/logo-light.png" width="360" alt="NX2Apple, by nxnative">
+</picture>
 
 **Your Switch games, running on your iPhone.**
 
@@ -16,12 +19,7 @@
 [![English](https://img.shields.io/badge/🇺🇸_English-current-blue)](README.md)
 [![简体中文](https://img.shields.io/badge/🇨🇳_简体中文-available-green)](README.zh-CN.md)
 
-<img src="frontend/screenshots/hero-features-en.png" width="100%" alt="NX2Apple — Switch games on your iPhone">
-
-> **New in v0.4.5**
->
-> - **Mac app output** — build a double-clickable `.app` instead of an IPA
-> - **Older iPhones and iPads** — turn on BC texture decoding when building
+<img src="frontend/screenshots/hero-features-en.png" width="100%" alt="NX2Apple — Switch games on iPhone and Mac">
 
 
 A macOS app takes your own game dumps and does the whole thing with a few clicks — unpack, rewrite
