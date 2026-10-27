@@ -438,6 +438,8 @@ enum L10n {
         "controls.fn.LS": ("按下左摇杆", "Left stick press"),
         "controls.fn.RS": ("按下右摇杆", "Right stick press"),
         "controls.fn.Shake": ("摇动手柄", "Shake"),
+        "launch.advanced": ("高级设置", "Advanced settings"),
+        "launch.advancedCount": ("%ld 项", "%ld settings"),
         "msg.archiveLog": ("归档：%@ → %@", "Archive: %@ → %@"),
     ]
 
