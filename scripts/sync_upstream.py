@@ -46,6 +46,11 @@ OURS = {'dm/host/romfs_arc.c', 'dm/host/romfs_arc.h', 'dm/tools/romfs_arc.py',
         # (a verify-only patcher was not enough: the sync replaced it first and then complained).
         'dm/games/game.py',
         'dm/gfx/tex/tests/t_bcdec.c',
+        # The Mac front end's key and controller button map (seedds/nxnative#386, still open):
+        # the launcher's Controls page writes DM_KEYMAP / DM_PAD_MAP, and patch_front_mac() makes
+        # front_mac.m read them. Fork-only until #386 merges, so a sync must not delete them.
+        'dm/host/input_map.h',
+        'dm/host/tests/t_input_map.c',
         # The Increased Memory Limit guide the README links to; upstream has no such file, and the
         # first wholesale sync deleted it.
         'dm/ios/ENTITLEMENTS.md',
@@ -329,19 +334,27 @@ def patch_makefile(t):
 TESTS_MK = 'dm/host/tests/Makefile'
 def patch_tests_makefile(t):
     """The three fs tests #include ../hle_fs.c, which now calls the archive reader: without
-    romfs_arc.c on their command lines they stop with undefined _romfsarc_* symbols (PR #12)."""
-    if 'romfs_arc.c' in t: return skip('tests/Makefile (already patched)')
-    P = [
-        ('t_fs', 'clang -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_fs.c t_fs_stub.c ../hle_bigstack.c\n',
-         'clang -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_fs.c t_fs_stub.c ../hle_bigstack.c ../romfs_arc.c\n'),
-        ('t_fs_commit_list', 'clang -O1 -Wall -Wno-unused-function -I.. $(GINC) -o $@ t_fs_commit_list.c t_fs_stub.c ../hle_bigstack.c\n',
-         'clang -O1 -Wall -Wno-unused-function -I.. $(GINC) -o $@ t_fs_commit_list.c t_fs_stub.c ../hle_bigstack.c ../romfs_arc.c\n'),
-        ('t_fs_case', 'clang -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_fs_case.c ../hle_bigstack.c\n',
-         'clang -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_fs_case.c ../hle_bigstack.c ../romfs_arc.c\n'),
-    ]
-    for name, old, new in P:
-        if old not in t: fail(f'{TESTS_MK}: {name} link line missing (upstream changed the test rules)')
-        t = t.replace(old, new, 1)
+    romfs_arc.c on their command lines they stop with undefined _romfsarc_* symbols (PR #12).
+
+    Three independent additions follow (the fs link lines, the touch-pad test, the key map
+    test), each with its own "already there" test. This used to start with
+    `if 'romfs_arc.c' in t: return skip(...)`, which made every later addition dead code: the
+    touch-pad block never ran once the fs lines were in, and the marker check could not notice
+    its absence. Only the first block skips now.
+    """
+    if 'romfs_arc.c' not in t:
+        P = [
+            ('t_fs', 'clang -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_fs.c t_fs_stub.c ../hle_bigstack.c\n',
+             'clang -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_fs.c t_fs_stub.c ../hle_bigstack.c ../romfs_arc.c\n'),
+            ('t_fs_commit_list', 'clang -O1 -Wall -Wno-unused-function -I.. $(GINC) -o $@ t_fs_commit_list.c t_fs_stub.c ../hle_bigstack.c\n',
+             'clang -O1 -Wall -Wno-unused-function -I.. $(GINC) -o $@ t_fs_commit_list.c t_fs_stub.c ../hle_bigstack.c ../romfs_arc.c\n'),
+            ('t_fs_case', 'clang -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_fs_case.c ../hle_bigstack.c\n',
+             'clang -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_fs_case.c ../hle_bigstack.c ../romfs_arc.c\n'),
+        ]
+        for name, old, new in P:
+            if old not in t: fail(f'{TESTS_MK}: {name} link line missing (upstream changed the test rules)')
+            t = t.replace(old, new, 1)
+        done('tests/Makefile romfs_arc.c')
     # the touch-pad geometry test (dm/host/touchpad_geometry.h): header-only, so it needs its own
     # rule and a place in the run list
     if 't_touchpad_geometry' not in t:
@@ -357,6 +370,20 @@ def patch_tests_makefile(t):
                       '$(B)/t_touchpad_geometry: t_touchpad_geometry.c ../touchpad_geometry.h ../dm_input.h | $(B)\n'
                       '\tclang -O1 -Wall -I.. $(GINC) -o $@ t_touchpad_geometry.c\n' + rule_anchor, 1)
         done('tests/Makefile touchpad test')
+    # the key and controller map test (dm/host/input_map.h, seedds/nxnative#386): header-only too
+    if 't_input_map' not in t:
+        run_old = '$(B)/t_hid $(B)/t_haptics $(B)/t_haptics_apple'
+        if run_old not in t: fail(f'{TESTS_MK}: run list anchor for t_hid missing')
+        t = t.replace(run_old, '$(B)/t_hid $(B)/t_input_map $(B)/t_haptics $(B)/t_haptics_apple', 1)
+        body_old = '\t$(B)/t_hid\n'
+        if body_old not in t: fail(f'{TESTS_MK}: run body anchor for t_hid missing')
+        t = t.replace(body_old, body_old + '\t$(B)/t_input_map\n', 1)
+        rule_anchor = '$(B)/t_hid: t_hid.c'
+        if rule_anchor not in t: fail(f'{TESTS_MK}: t_hid rule missing')
+        t = t.replace(rule_anchor,
+                      '$(B)/t_input_map: t_input_map.c ../input_map.h ../dm_input.h | $(B)\n'
+                      '\tclang -O1 -Wall -Werror -Wno-unused-function -I.. -o $@ t_input_map.c\n' + rule_anchor, 1)
+        done('tests/Makefile input map test')
     # the prerequisites too, so a change to the reader rebuilds them — and hle_profile.h, so a
     # change to the runtime profile does
     for name in ('t_fs', 't_fs_commit_list', 't_fs_case'):
@@ -886,6 +913,140 @@ def patch_main_m(t):
         done(f'main.m {name}')
     return t
 
+def patch_patch_nso(t):
+    """The NRO header skip in dm/tools/patch_nso.py (issue #14).
+
+    An NRO file is the image itself preceded by a 0x80-byte header, so its text segment starts at
+    0x80; an NSO's starts at 0 after decompression. The scan and CODE_RANGES assumed 0, so on an
+    NRO the header's build ID was decoded as instructions and reported as a site
+    ("44 ldr x18, #0xfffffffffff40370" on Final Fantasy X/X-2 HD Remaster), and the last 0x80
+    bytes of text were never scanned.
+
+    This was fixed once (4b863234) and then silently reverted: patch_nso.py was not a carrier, so
+    the next sync that rewrote it took upstream's version, and the fork's test kept failing from
+    then on. It is a carrier now.
+    """
+    if 'TEXT_LO = segs[0][1]' in t: return skip('patch_nso.py NRO header (already patched)')
+    P = [
+        ('data blocks and code ranges',
+         'DATA_BLOCKS = nso_code.data_blocks(IMG, TEXT_END, md)\n'
+         'CODE_RANGES = list(zip([0] + [e for _, e in DATA_BLOCKS], [s for s, _ in DATA_BLOCKS] + [TEXT_END]))\n',
+         'DATA_BLOCKS = nso_code.data_blocks(IMG, TEXT_LO + TEXT_END, md, lo=TEXT_LO)\n'
+         '# The text segment starts at its memory offset: 0 for an NSO (the image is rebuilt from 0) and\n'
+         '# 0x80 for an NRO (the file is the image preceded by its header, so text sits at 0x80). Scanning\n'
+         '# an NRO from 0 read the header\'s build ID as instructions and reported\n'
+         '# "44 ldr x18, #0xfffffffffff40370" on Final Fantasy X/X-2 HD Remaster (GitHub issue #14).\n'
+         '# TEXT_LO is where the code really begins in IMG; data_blocks() gets the same lower bound so its\n'
+         '# returned offsets are already IMG-absolute and CODE_RANGES needs no further shift.\n'
+         'TEXT_LO = segs[0][1]\n'
+         'CODE_RANGES = list(zip([TEXT_LO] + [e for _, e in DATA_BLOCKS], [s for s, _ in DATA_BLOCKS] + [TEXT_LO + TEXT_END]))\n'),
+        ('site starts bound', 'starts = sorted(x for x in starts if x < TEXT_END)',
+         'starts = sorted(x for x in starts if x < TEXT_LO + TEXT_END)'),
+        ('observation gate window', '    for a in range(off, min(off + 4 * 16, TEXT_END), 4):',
+         '    for a in range(off, min(off + 4 * 16, TEXT_LO + TEXT_END), 4):'),
+        ('observation gate assert', '    assert off < TEXT_END and off not in kinds',
+         '    assert off < TEXT_LO + TEXT_END and off not in kinds'),
+    ]
+    for name, old, new in P:
+        if new in t:
+            skip(f'patch_nso.py {name} (already patched)')
+            continue
+        if old not in t:
+            fail(f'dm/tools/patch_nso.py: patch "{name}" anchor missing (upstream reworked the text '
+                 'scan; merge the NRO header skip by hand)')
+        t = t.replace(old, new, 1)
+        done(f'patch_nso.py {name}')
+    return t
+
+def patch_front_mac(t):
+    """DM_KEYMAP and DM_PAD_MAP in the Mac front end, from upstream seedds/nxnative#386.
+
+    The launcher's Controls page (Settings → Controls) writes these two variables, but until this
+    landed here nothing on this side read them: the page moved the fields and the game kept its
+    default keys. Upstream's #386 is still open, so the change has to live here as a carrier: the
+    tables below are its hunks, and the day #386 merges, a sync brings them in whole and this
+    patcher finds every anchor already applied (or, if upstream rewords one, fails loudly).
+
+    input_map.h is fork-only for now (upstream's file, but shipped here by this commit) and is in
+    OURS so a sync cannot take it away.
+    """
+    if 'key_map_default(&g_keys)' in t: return skip('front_mac.m DM_KEYMAP (already patched)')
+    P = [
+        ('key map comment',
+         '// Key map (Nintendo layout): WASD left stick, arrow keys D-pad, J=A K=B U=X I=Y, Q=L E=R, Z=ZL C=ZR, F=press left stick G=press right stick, Return=+ Tab=−, Space=shake the controller.\n',
+         '// Key map (Nintendo layout): WASD left stick, arrow keys D-pad, J=A K=B U=X I=Y, Q=L E=R, Z=ZL C=ZR, F=press left stick G=press right stick, Return=+ Tab=−, Space=shake the controller;\n'
+         "// DM_KEYMAP moves a function to another key (the right stick too), DM_PAD_MAP changes what a controller's buttons send (input_map.h).\n"),
+        ('input_map include',
+         '#include "pad_slots.h"\n',
+         '#include "pad_slots.h"\n#include "input_map.h"\n'),
+        ('the four stick flags',
+         'static int g_w, g_a, g_s, g_d;\n',
+         ''),
+        ('key state',
+         'static void push(void) {\n    int32_t lx = (g_d - g_a) * 32767, ly = (g_w - g_s) * 32767;\n    dm_input_set(g_btn, lx, ly, 0, 0);\n}\n'
+         'static int key_bit(unsigned short code) {\n'
+         '    switch (code) {\n'
+         '        case 38: return 0;  case 40: return 1;  case 32: return 2;  case 34: return 3;    // J K U I → A B X Y\n'
+         '        case 3: return 4;   case 5: return 5;                                            // F G → press stick\n'
+         '        case 12: return 6;  case 14: return 7;  case 6: return 8;   case 8: return 9;    // Q E Z C → L R ZL ZR\n'
+         '        case 36: return 10; case 48: return 11;                                          // Return Tab → + −\n'
+         '        case 123: return 12; case 126: return 13; case 124: return 14; case 125: return 15; // ← ↑ → ↓\n'
+         '    }\n'
+         '    return -1;\n'
+         '}\n',
+         '// Keyboard: each key holds one function of the key map (input_map.h; DM_KEYMAP changes it), the held functions make the buttons and both sticks\n'
+         'static key_map g_keys;\n'
+         'static uint32_t g_held_fn;   // bit f: a key holding function f is down\n'
+         'static void push(void) {\n'
+         '    uint32_t h = g_held_fn;\n'
+         '    #define D(f) ((int32_t)(h >> (f) & 1))\n'
+         '    dm_input_set(g_btn, (D(IM_LRIGHT) - D(IM_LLEFT)) * 32767, (D(IM_LUP) - D(IM_LDOWN)) * 32767, (D(IM_RRIGHT) - D(IM_RLEFT)) * 32767, (D(IM_RUP) - D(IM_RDOWN)) * 32767);\n'
+         '    #undef D\n'
+         '}\n'),
+        ('on_key',
+         '    unsigned short c = e.keyCode;\n'
+         '    switch (c) { case 13: g_w = down; break; case 0: g_a = down; break; case 1: g_s = down; break; case 2: g_d = down; break; }\n'
+         '    int b = key_bit(c);\n'
+         '    uint64_t m = b >= 0 ? 1ull << b : c == 49 ? DM_BTN_SHAKE : 0;   // Space: shaken while held\n'
+         '    g_btn = down ? (g_btn | m) : (g_btn & ~m);\n',
+         '    int f = key_map_fn(&g_keys, e.keyCode); if (f < 0) return;\n'
+         '    g_held_fn = down ? (g_held_fn | 1u << f) : (g_held_fn & ~(1u << f));\n'
+         '    g_btn = (g_held_fn & 0xffff) | (g_held_fn >> IM_SHAKE & 1 ? DM_BTN_SHAKE : 0);\n'),
+        ('pad map state',
+         'static int g_merge, g_kbd_own;\n',
+         'static int g_merge, g_kbd_own;\nstatic pad_map g_padmap;   // DM_PAD_MAP (input_map.h): what each button sends, applied to every controller\n'),
+        ('pad map apply',
+         '    #undef K\n    dm_pad_set_player(p, m, pad_axis(g.leftThumbstick.xAxis.value), pad_axis(g.leftThumbstick.yAxis.value), pad_axis(g.rightThumbstick.xAxis.value), pad_axis(g.rightThumbstick.yAxis.value));\n',
+         '    #undef K\n    m = pad_map_apply(&g_padmap, m);\n    dm_pad_set_player(p, m, pad_axis(g.leftThumbstick.xAxis.value), pad_axis(g.leftThumbstick.yAxis.value), pad_axis(g.rightThumbstick.xAxis.value), pad_axis(g.rightThumbstick.yAxis.value));\n'),
+        ('start: read the two variables',
+         '    const char *e = getenv("DM_PAD_MERGE"); g_merge = e && atoi(e);\n',
+         '    key_map_default(&g_keys); pad_map_default(&g_padmap);\n'
+         '    const char *km = getenv("DM_KEYMAP"), *pm = getenv("DM_PAD_MAP");\n'
+         '    if (km && *km) { int bad = key_map_parse(&g_keys, km); LOG("front end: keyboard map from DM_KEYMAP (%s)%s", km, bad ? ", malformed entries left out" : ""); }\n'
+         '    if (pm && *pm) { int bad = pad_map_parse(&g_padmap, pm); LOG("front end: controller buttons from DM_PAD_MAP (%s)%s", pm, bad ? ", malformed entries left out" : ""); }\n'
+         '    const char *e = getenv("DM_PAD_MERGE"); g_merge = e && atoi(e);\n'),
+        # two call sites, one per indentation: input_release (4 spaces) and front_text_input (8)
+        ('release on focus loss',
+         '    g_btn = 0; g_w = g_a = g_s = g_d = 0; push();\n    if (g_mouse_down)',
+         '    g_btn = 0; g_held_fn = 0; push();\n    if (g_mouse_down)'),
+        ('release for the text box',
+         '        g_btn = 0; g_w = g_a = g_s = g_d = 0; push();\n        dm_touch_set(NULL, 0);',
+         '        g_btn = 0; g_held_fn = 0; push();\n        dm_touch_set(NULL, 0);'),
+    ]
+    for name, old, new in P:
+        # A deletion entry has an empty `new`, which is "in" every string, so it would report
+        # "already patched" on the first run and never delete anything. It is applied when its
+        # `old` is gone instead.
+        if (old not in t) if not new else (new in t):
+            skip(f'front_mac.m {name} (already patched)')
+            continue
+        if old not in t:
+            fail(f'dm/host/front_mac.m: patch "{name}" anchor missing (upstream moved the key handling; '
+                 'merge seedds/nxnative#386 by hand)')
+        t = t.replace(old, new, 1)
+        done(f'front_mac.m {name}')
+    return t
+
 def patch_dm_h(t):
     """dm.h pulls in hle_profile.h, so every host source can call dm_profile().
 
@@ -929,6 +1090,8 @@ MARKERS = {
     'dm/gfx/nvn/nvn_mtl.m': 'if (on_sub_thread()) rec_publish();',
     'dm/games/0100A00019DE0000/game.tsv': 'build	v1	1.0.137848',
     'dm/host/dm.h': 'hle_profile.h',
+    'dm/host/front_mac.m': 'DM_KEYMAP',
+    'dm/tools/patch_nso.py': 'TEXT_LO',
 }
 PATCHERS = {
     'dm/host/hle_fs.c': patch_hle_fs,
@@ -941,6 +1104,8 @@ PATCHERS = {
     'dm/gfx/nvn/nvn_mtl.m': patch_nvn_mtl,
     'dm/games/0100A00019DE0000/game.tsv': patch_hades2,
     'dm/host/dm.h': patch_dm_h,
+    'dm/host/front_mac.m': patch_front_mac,
+    'dm/tools/patch_nso.py': patch_patch_nso,
 }
 
 report, problems = [], []
