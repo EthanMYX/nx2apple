@@ -456,6 +456,15 @@ struct ContentView: View {
                     Image(systemName: "desktopcomputer").foregroundStyle(.secondary)
                     Text(m.t("library.localNote")).font(.manrope(13)).foregroundStyle(.secondary)
                     Spacer()
+                    if let staged = m.appStaged {
+                        // A downloaded, verified update (BuildModel.stageAppUpdate): it goes in when the app quits, or now.
+                        // This branch only shows with no build running, and restartToUpdate checks again.
+                        HStack(spacing: 10) {
+                            Circle().fill(LauncherPalette.ready).frame(width: 6, height: 6)
+                            Text(String(format: m.t("library.appReady"), staged.release.tag)).font(.manrope(13)).foregroundStyle(.secondary)
+                        }
+                        Button(m.t("app.restartNow")) { m.restartToUpdate() }.buttonStyle(LauncherSecondaryButtonStyle())
+                    }
                     if gamepad.connected {
                         // The buttons a controller has here, named as the game names them (A on the right)
                         HStack(spacing: 18) {

@@ -119,6 +119,26 @@ installed and no resource bundle beside the executable.
 The app icon is drawn by `make_icon.swift`; `./make_icon.sh` writes `icon.iconset/`
 and `AppIcon.icns` from it.
 
+## App updates
+
+When the app opens it asks GitHub for the latest release. With **Install updates
+automatically** on (Settings → App, the default), a newer release is downloaded in
+the background and staged: the zip's SHA-256 must match the `digest` GitHub gives
+for the asset (a release without one is not installed automatically), and the app
+inside must carry this app's bundle identifier, an executable and the release's
+version. The staged copy replaces the app when you quit it, so the next launch is
+the new version; **Restart now** in Settings and in the library's bottom line
+installs it at once. Neither runs while a build does: the swap ends with a relaunch,
+which would end the build's process group. If you quit during a build, the build is
+stopped as before and the update waits for a later quit. With the switch off,
+**Update to vX** in Settings downloads, verifies and relaunches as before (a
+release without a digest is still accepted there; a wrong digest never is).
+
+A launcher built from this repository never replaces itself: `swift run` (no
+bundle), a bundle under `.build/` or `DerivedData/`, a bundle beside
+`Package.swift` (the `NX2Apple.app` made here), or one whose Info.plist version
+is not this binary's release number. `AppUpdate.swift` holds these rules.
+
 ## Run
 
 ```bash
