@@ -944,11 +944,20 @@ final class BuildModel: ObservableObject {
     }
 
     nonisolated static func duration(_ seconds: Double) -> String {
-        let f = DateComponentsFormatter()
-        f.unitsStyle = .abbreviated
-        f.allowedUnits = seconds >= 3600 ? [.hour, .minute] : (seconds >= 60 ? [.minute, .second] : [.second])
-        f.maximumUnitCount = 2
-        return f.string(from: max(seconds, 1)) ?? ""
+        // Formatted by hand, not DateComponentsFormatter: the formatter follows the system
+        // locale, so a Chinese macOS wrote "4秒" into a log whose every other line was English
+        // (and the test that pinned "4s" failed on any non-English machine). The abbreviations
+        // are the interface language's, via the same string table as everything else.
+        let s = max(Int(seconds.rounded(.up)), 1)
+        if s >= 3600 {
+            let h = s / 3600, m = (s % 3600) / 60
+            return h > 0 && m > 0 ? "\(h)h \(m)m" : "\(h)h"
+        }
+        if s >= 60 {
+            let m = s / 60, sec = s % 60
+            return sec > 0 ? "\(m)m \(sec)s" : "\(m)m"
+        }
+        return "\(s)s"
     }
 
     nonisolated static func parseStage(_ line: String) -> (k: Int, name: String, state: StepState, detail: String, percent: Double?)? {
