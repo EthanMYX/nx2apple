@@ -12,7 +12,13 @@ final class LibraryTests: XCTestCase {
         try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
     }
 
+    /// Every test app carries this bundle ID, so a saved choice goes to a preferences domain of this run and never to a real game's.
+    private var bundleID: String { "org.nxnative.frontendtests." + temporary.lastPathComponent }
+
     override func tearDownWithError() throws {
+        let domain = bundleID as CFString
+        for key in (CFPreferencesCopyKeyList(domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost) as? [String]) ?? [] { CFPreferencesSetAppValue(key as CFString, nil, domain) }
+        CFPreferencesAppSynchronize(domain)
         try FileManager.default.removeItem(at: temporary)
     }
 
@@ -23,7 +29,7 @@ final class LibraryTests: XCTestCase {
         for name in ["nxnative", "dmhost"] {
             try FileManager.default.createSymbolicLink(at: executables.appendingPathComponent(name), withDestinationURL: URL(fileURLWithPath: "/usr/bin/true"))
         }
-        let info: [String: Any] = ["DMTitleID": titleID, "CFBundleDisplayName": name, "CFBundleExecutable": "nxnative"]
+        let info: [String: Any] = ["DMTitleID": titleID, "CFBundleDisplayName": name, "CFBundleExecutable": "nxnative", "CFBundleIdentifier": bundleID]
         try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
             .write(to: app.appendingPathComponent("Contents/Info.plist"))
         return app
@@ -116,25 +122,30 @@ final class LibraryTests: XCTestCase {
         let file = temporary.appendingPathComponent("library.json")
         let library = GameLibrary(file: file)
         let id = try library.addApp(app)
-        XCTAssertEqual(library.games[0].launchEnvironment(settings), ["DM_FPS_TARGET": "30", "DM_RENDER_SCALE": "1.0", "DM_FPS_HOLD": "on"])
-        library.setLaunchOption(settings[0], "60", for: id)
-        library.setLaunchOption(settings[1], "1.00", for: id)   // the default, as a slider writes it: not kept
-        library.setLaunchOption(settings[2], "off", for: id)
-        XCTAssertEqual(GameLibrary(file: file).games[0].launchOptions, ["DM_FPS_TARGET": "60", "DM_FPS_HOLD": "off"])
-        XCTAssertEqual(library.games[0].launchEnvironment(settings), ["DM_FPS_TARGET": "60", "DM_RENDER_SCALE": "1.0", "DM_FPS_HOLD": "off"])
-        library.setLaunchOption(settings[0], "30", for: id)
-        XCTAssertNil(library.games[0].launchOptions["DM_FPS_TARGET"])
-        library.resetLaunchOptions(for: id)
-        XCTAssertTrue(library.games[0].launchOptions.isEmpty)
+        let store = SavedChoices(app: app.path, titleID: titleID)
+        XCTAssertEqual(library.games[0].launchEnvironment(settings), [:], "the rows of launcher.json are saved choices, not launch overrides")
+        store.set(settings[0], "60")
+        store.set(settings[1], "1.00")   // the default, as a slider writes it: not kept
+        store.set(settings[2], "off")
+        XCTAssertEqual(store.raw("DM_FPS_TARGET") as? String, "60")
+        XCTAssertNil(store.raw("DM_RENDER_SCALE"))
+        XCTAssertEqual(store.raw("DM_FPS_HOLD") as? String, "off")
+        XCTAssertTrue(GameLibrary(file: file).games[0].launchOptions.isEmpty, "the library file no longer holds them")
+        store.set(settings[0], "30")
+        XCTAssertNil(store.raw("DM_FPS_TARGET"))
+        store.reset(settings)
+        XCTAssertFalse(store.hasChoices(settings))
     }
 
     func testLaunchOptionTheBuildNoLongerOffersFallsBackToItsDefault() throws {
         let app = try makeApp(titleID)
         try writeSettings(app)
         let settings = try XCTUnwrap(LaunchSetting.read(app: app.path))
-        var game = LibraryGame(titleID: titleID, name: "Hades", appPath: app.path)
-        game.launchOptions = ["DM_FPS_TARGET": "120", "DM_RENDER_SCALE": "2", "DM_FPS_HOLD": "maybe"]
-        XCTAssertEqual(game.launchEnvironment(settings), ["DM_FPS_TARGET": "30", "DM_RENDER_SCALE": "1.0", "DM_FPS_HOLD": "on"])
+        let store = SavedChoices(app: app.path, titleID: titleID)
+        for (key, value) in [("DM_FPS_TARGET", "120"), ("DM_RENDER_SCALE", "2"), ("DM_FPS_HOLD", "maybe")] {
+            CFPreferencesSetAppValue(SavedChoices.key(key) as CFString, value as CFString, store.domain as CFString)
+        }
+        XCTAssertEqual(settings.map(store.current), ["30", "1.0", "on"])
     }
 
     func testBannersComeFromTheTitleListAndTakeTheHero() async throws {
@@ -644,7 +655,7 @@ final class LibraryTests: XCTestCase {
         try shot("build", ContentView(model: model, library: library, initialPage: .builds, performStartupChecks: false), size: NSSize(width: 1280, height: 940))
 
         if let upscale = LaunchSetting.read(app: library.games.first { $0.id == botwID }!.appPath)?.first(where: { $0.env == "DM_PRESENT_UPSCALE" }) {
-            library.setLaunchOption(upscale, "metalfx", for: botwID)
+            SavedChoices(app: library.games.first { $0.id == botwID }!.appPath, titleID: "01007EF00011E000").set(upscale, "metalfx")
         }
         try shot("launch-options", LaunchOptionsView(m: model, library: library, gameID: botwID), size: NSSize(width: 600, height: 700), trafficLights: false)   // a sheet: no window controls of its own
     }
@@ -756,7 +767,7 @@ final class LibraryTests: XCTestCase {
             let dm = URL(fileURLWithPath: first.appPath).appendingPathComponent("Contents/Resources/dm")
             try FileManager.default.createDirectory(at: dm, withIntermediateDirectories: true)
             try FileManager.default.copyItem(at: URL(fileURLWithPath: json), to: dm.appendingPathComponent("launcher.json"))
-            if let fps = LaunchSetting.read(app: first.appPath)?.first(where: { $0.env == "DM_FPS_TARGET" }) { library.setLaunchOption(fps, "60", for: first.id) }
+            if let fps = LaunchSetting.read(app: first.appPath)?.first(where: { $0.env == "DM_FPS_TARGET" }) { SavedChoices(app: first.appPath, titleID: first.titleID).set(fps, "60") }
             let host = NSHostingView(rootView: LaunchOptionsView(m: model, library: library, gameID: first.id).environmentObject(PadFocus()))
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
             window.contentView = host

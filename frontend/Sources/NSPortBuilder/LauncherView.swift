@@ -86,6 +86,7 @@ struct ContentView: View {
         .frame(minWidth: 900, idealWidth: 1280, minHeight: 680, idealHeight: 900)
         .onAppear {
             gamepad.perform = padAction
+            if performStartupChecks { library.migrateLaunchOptions() }
             refreshArtwork()
             if performStartupChecks { library.discover(); fetchArtwork(); m.refreshDevices(); checkTools() }
             if performStartupChecks {
@@ -638,11 +639,13 @@ struct ContentView: View {
             let configuration = NSWorkspace.OpenConfiguration()
             // The launch options; the app's launcher (dm/mac/launcher.c) keeps a variable that is already set.
             // The keyboard and controller layout (Settings → Controls) goes to every game; a build whose host does not read it plays with the default keys.
-            var environment = controls.environment
-            if let settings = LaunchSetting.forMac(app: game.appPath, titleID: game.titleID, repo: m.repoPath, labels: m.t) {
-                environment.merge(game.launchEnvironment(settings)) { _, own in own }
-            }
-            environment.merge(game.modEnvironment(GameMod.list(in: GameMod.folder(for: game, library: library.folder), titleID: game.titleID))) { _, mods in mods }
+            // They stay launch overrides (the environment) for now: DM_KEYMAP and DM_PAD_MAP become saved choices only when seedds/nxnative#386 merges.
+            library.migrateLaunchOptions()
+            let settings = LaunchSetting.forMac(app: game.appPath, titleID: game.titleID, repo: m.repoPath, labels: m.t) ?? []
+            let mods = GameMod.list(in: GameMod.folder(for: game, library: library.folder), titleID: game.titleID)
+            let environment = game.startEnvironment(controls: controls.environment, settings: settings, mods: mods,
+                                                  store: SavedChoices(app: game.appPath, titleID: game.titleID),
+                                                  appReadsStore: SavedChoices.appReadsStore(app: game.appPath))
             if !environment.isEmpty { configuration.environment = environment }
             NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: game.appPath), configuration: configuration) { _, error in
                 DispatchQueue.main.async {
