@@ -445,6 +445,9 @@ enum L10n {
         "launch.advancedCount": ("%ld 项", "%ld settings"),
         "launch.scaleOfDocked": ("底座模式 %2$@ 的 %1$ld%%", "%ld%% of %@ docked"),
         "launch.scaleOfHandheld": ("掌机模式 %2$@ 的 %1$ld%%", "%ld%% of %@ handheld"),
+        "pad.play": ("开始游戏", "Play"),
+        "pad.options": ("启动选项", "Options"),
+        "pad.back": ("返回", "Back"),
         "msg.archiveLog": ("归档：%@ → %@", "Archive: %@ → %@"),
     ]
 
