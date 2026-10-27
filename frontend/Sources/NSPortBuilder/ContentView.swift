@@ -1683,6 +1683,14 @@ final class BuildModel: ObservableObject {
             }
         }
         cands += ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]
+        // Homebrew's python@3.x is always python3.x, but the bare python3 link exists only for
+        // the formula that is linked: a 3.12 beside an unlinked default would go unseen.
+        for dir in ["/opt/homebrew/bin", "/usr/local/bin"] {
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
+            cands += names.filter { $0.range(of: #"^python3\.\d+$"#, options: .regularExpression) != nil }
+                .sorted { $0.compare($1, options: .numeric) == .orderedDescending }
+                .map { dir + "/" + $0 }
+        }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/which")
         p.arguments = ["-a", "python3"]
@@ -1822,10 +1830,14 @@ final class BuildModel: ObservableObject {
         let pyVer = pythonVersion(py).map { "\($0.0).\($0.1)" } ?? "?"
         // A too-old interpreter is a different problem from a missing package: say which one it is,
         // because the fix differs (install a newer Python vs pip install into this one).
+        // A version we cannot read means no interpreter ran at all (py is then the venv
+        // that does not exist yet), which is not the same as one that is too old.
+        let minVer = "\(minPython.0).\(minPython.1)"
         let pyDetail = pyOK ? py
-            : (pythonVersion(py).map { $0 >= minPython } ?? false)
+            : pythonVersion(py).map { $0 >= minPython
                 ? "dep.python.missing:\(py) (\(pyVer))"
-                : "dep.python.old:\(pyVer):\(minPython.0).\(minPython.1)"
+                : "dep.python.old:\(pyVer):\(minVer)" }
+            ?? "dep.python.notFound:\(minVer):\(minVer)"
         out.append(Dep(id: "python", name: "dep.python", hint: "dep.python.hint",
                        present: pyOK, detail: pyDetail,
                        installCmd: [py, "-m", "pip", "install", "--user", "lz4", "capstone", "fonttools", "backports.zstd"]))
@@ -1872,7 +1884,7 @@ final class BuildModel: ObservableObject {
             }
             DispatchQueue.main.async {
                 if let j = self.deps.firstIndex(where: { $0.id == dep.id }) { self.deps[j].installing = false }
-                if !ok { self.doneNote = String(format: self.t("dep.install.fail"), 1) }
+                if !ok { self.doneNote = String(format: self.t("dep.install.fail"), self.t(dep.name)) }
                 self.checkDeps()
             }
         }
@@ -1909,14 +1921,15 @@ final class BuildModel: ObservableObject {
     }
 
     /// A dependency row's second column: a path when there is one, else the translated hint.
-    /// `detail` carries either a real path, an L10n key, or "key:argument".
+    /// `detail` carries either a real path, an L10n key, or "key:argument[:argument…]".
     func depDetail(_ d: Dep) -> String {
         let raw = d.detail
         if raw.isEmpty { return t(d.hint) }
         if raw.hasPrefix("/") || raw.hasPrefix("~") { return raw }
         if let colon = raw.firstIndex(of: ":") {
             let key = String(raw[..<colon]), arg = String(raw[raw.index(after: colon)...])
-            if L10n.table[key] != nil { return String(format: t(key), shortPath(arg)) }
+            let args = arg.components(separatedBy: ":").map { shortPath($0) as CVarArg }
+            if L10n.table[key] != nil { return String(format: t(key), arguments: args) }
         }
         if L10n.table[raw] != nil { return t(raw) }
         return raw
