@@ -16,6 +16,26 @@ enum Lang: String {
         guard let first = Locale.preferredLanguages.first?.lowercased() else { return .en }
         return first.hasPrefix("zh") ? .zh : .en
     }
+
+    /// What the app starts in: the language picked in Settings, else the device's.
+    ///
+    /// The picker exists because the device language is not always the one someone wants to read
+    /// this app in (a Chinese Windows display language on hardware bought abroad, a Mac kept in
+    /// English by habit). "Follow the system" stays the default; the three states are stored as
+    /// "" (follow), "zh", "en".
+    static func initial() -> Lang {
+        switch UserDefaults.standard.string(forKey: "appLanguage") ?? "" {
+        case "zh": return .zh
+        case "en": return .en
+        default: return device()
+        }
+    }
+
+    /// The stored choice, or nil when following the system.
+    static var saved: Lang? {
+        get { Lang(rawValue: UserDefaults.standard.string(forKey: "appLanguage") ?? "") }
+        set { UserDefaults.standard.set(newValue?.rawValue ?? "", forKey: "appLanguage") }
+    }
 }
 
 enum L10n {
@@ -68,6 +88,11 @@ enum L10n {
         "nav.library": ("\u{6e38}\u{620f}\u{5e93}", "Library"),
         "nav.builds": ("\u{6784}\u{5efa}", "Builds"),
         "nav.settings": ("\u{8bbe}\u{7f6e}", "Settings"),
+        "settings.language": ("界面语言", "Language"),
+        "settings.language.system": ("跟随系统", "Follow system"),
+        "settings.language.zh": ("中文", "\u{4e2d}\u{6587}"),
+        "settings.language.en": ("English", "English"),
+        "settings.appNote2": ("构建你自己的 Switch 游戏", "Build your own Switch games"),
         "library.setupHint": ("\u{9996}\u{6b21}\u{6784}\u{5efa}\u{524d}\u{ff0c}\u{8bf7}\u{5b8c}\u{6210}\u{4ee5}\u{4e0b}\u{8bbe}\u{7f6e}\u{3002}", "Before your first build, finish the setup below."),
         "library.ready": ("\u{53ef}\u{5728} Mac \u{4e0a}\u{8fd0}\u{884c}", "Ready on Mac"),
         "library.building": ("\u{6b63}\u{5728}\u{6784}\u{5efa}", "Building"),

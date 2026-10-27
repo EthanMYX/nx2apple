@@ -122,8 +122,14 @@ struct ContentView: View {
 
     private var topBar: some View {
         HStack(spacing: 6) {
-            Text("nxnative").font(.manrope(27, .bold)).tracking(-0.8)
-                .padding(.trailing, 34)
+            // The project is NX2Apple (the user's call: what this fork produces is NX2Apple);
+            // "by nxnative" credits the engine it stands on, which the sketch kept.
+            VStack(alignment: .leading, spacing: -2) {
+                Text("NX2Apple").font(.manrope(27, .bold)).tracking(-0.8)
+                Text("— by nxnative").font(.manrope(10.5, .medium))
+                    .foregroundStyle(LauncherPalette.unbuilt).tracking(0.2)
+            }
+            .padding(.trailing, 34)
             ForEach(LauncherPage.allCases, id: \.self) { destination in
                 Button { page = destination } label: {
                     Label(m.t("nav." + destination.rawValue), systemImage: destination.symbol)

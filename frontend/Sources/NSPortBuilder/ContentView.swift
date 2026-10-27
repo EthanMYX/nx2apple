@@ -136,7 +136,7 @@ final class BuildModel: ObservableObject {
     @Published var dotnetPath = ""
 
     /// Interface language: the system's, read at every launch.
-    @Published var lang: Lang = Lang.device()
+    @Published var lang: Lang = Lang.initial()
     func t(_ key: String) -> String { L10n.string(key, lang) }
 
     private var proc: Process?
@@ -235,6 +235,7 @@ final class BuildModel: ObservableObject {
         for base in ["/ZCodeProject/", "/", "/Documents/", "/Desktop/"] {
             seeds.append(NSHomeDirectory() + base + "nxnative")
             seeds.append(NSHomeDirectory() + base + "NX2Apple")
+            seeds.append(NSHomeDirectory() + base + "NX2Apple")
             seeds.append(NSHomeDirectory() + base + "nxnative-romfs-archive")   // clones made before the rename still resolve
         }
         var seen = Set<String>()
@@ -286,7 +287,7 @@ final class BuildModel: ObservableObject {
     func cloneRepo() {
         guard !running, !repoBusy else { return }
         guard let git = Self.gitBinary() else { repoStatus = t("repo.gitMissing"); return }
-        let dest = NSHomeDirectory() + "/nxnative"
+        let dest = NSHomeDirectory() + "/NX2Apple"
         if FileManager.default.fileExists(atPath: dest) {
             if Self.isRepo(dest) { repoPath = dest; repoStatus = ""; checkRepoUpdates() }
             else { repoStatus = String(format: t("repo.destBusy"), shortPath(dest)) }
@@ -425,7 +426,7 @@ final class BuildModel: ObservableObject {
                 if Self.isNewer(tag, than: Self.appVersion),
                    let assets = obj["assets"] as? [[String: Any]] {
                     // nxnative-macOS-arm64.zip; releases from before the rename name it NS-Port-Builder-macOS-arm64.zip
-                    for name in ["nxnative-macOS-arm64.zip", "NS-Port-Builder-macOS-arm64.zip"] where found == nil {
+                    for name in ["NX2Apple-macOS-arm64.zip", "nxnative-macOS-arm64.zip", "NS-Port-Builder-macOS-arm64.zip"] where found == nil {
                         for a in assets where (a["name"] as? String) == name {
                             if let u = a["browser_download_url"] as? String { found = (tag, u) }
                         }
@@ -472,7 +473,7 @@ final class BuildModel: ObservableObject {
             try? unzip.run(); unzip.waitUntilExit()
             // The archive holds one app: nxnative.app, or NS Port Builder.app in a release from before the rename
             let newApp = ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [])
-                .first { $0.pathExtension == "app" } ?? dir.appendingPathComponent("nxnative.app")
+                .first { $0.pathExtension == "app" } ?? dir.appendingPathComponent("NX2Apple.app")
             guard unzip.terminationStatus == 0, FileManager.default.fileExists(atPath: newApp.path) else {
                 DispatchQueue.main.async { self.appBusy = false; self.appStatus = self.t("app.netFail") }
                 return
@@ -480,7 +481,7 @@ final class BuildModel: ObservableObject {
             // Copy the new bundle in beside the running one first: from there on every step is a
             // same-volume move, and a failure anywhere leaves a working app on disk.
             let cur = Bundle.main.bundleURL
-            let staging = cur.deletingLastPathComponent().appendingPathComponent("nxnative (new).app")
+            let staging = cur.deletingLastPathComponent().appendingPathComponent("NX2Apple (new).app")
             try? FileManager.default.removeItem(at: staging)
             do {
                 try FileManager.default.copyItem(at: newApp, to: staging)
@@ -1811,7 +1812,24 @@ struct BuilderView: View {
         }
         tools
         group(m.t("section.app"), footnote: m.appStatus) {
-            row("nxnative", detail: String(format: m.t("app.version"), BuildModel.appVersion)) {
+            // The interface language: the device default unless someone picks one here. Stored as
+            // "" (follow), "zh" or "en" so a later system-language change still applies.
+            row(m.t("settings.language"),
+                detail: Lang.saved.map { $0 == .zh ? m.t("settings.language.zh") : m.t("settings.language.en") }
+                    ?? m.t("settings.language.system"), dot: LauncherPalette.ready, help: "") {
+                Picker("", selection: Binding(
+                    get: { Lang.saved.map { $0.rawValue } ?? "" },
+                    set: { v in
+                        Lang.saved = v.isEmpty ? nil : Lang(rawValue: v)
+                        m.lang = Lang.initial()
+                    })) {
+                    Text(m.t("settings.language.system")).tag("")
+                    Text(m.t("settings.language.zh")).tag("zh")
+                    Text(m.t("settings.language.en")).tag("en")
+                }
+                .pickerStyle(.menu).labelsHidden().frame(width: 150)
+            }
+            row("NX2Apple", detail: String(format: m.t("app.version"), BuildModel.appVersion)) {
                 if let u = m.appUpdate {
                     Button(String(format: m.t("app.updateBtn"), u.tag)) { m.performAppUpdate() }.disabled(m.appBusy)
                 } else {
