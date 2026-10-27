@@ -270,12 +270,25 @@ final class BuildModel: ObservableObject {
         FileManager.default.fileExists(atPath: dir + "/dm/tools/nx_extract/Program.cs")
     }
 
+    /// Every file of the repository the launcher itself runs by path: one list, next to the calls that use it
+    /// (the build script in startBuild, the RomFS archive in the archive step). A copy older than this app lacks some of
+    /// them (#87: romfs_image.py exists since v0.4.8, so a build ran 70 minutes and failed at its last step). A new
+    /// tool the launcher calls goes into this list and is then checked before every build.
+    nonisolated static let buildScript = "scripts/build_ipa_from_nsp.py"
+    nonisolated static let romfsImageTool = "dm/tools/romfs_image.py"
+    nonisolated static let requiredTools = [buildScript, romfsImageTool]
+
+    /// The tools of `requiredTools` that `dir` does not have (empty: the build tools are as new as this app needs).
+    nonisolated static func missingTools(in dir: String) -> [String] {
+        requiredTools.filter { !FileManager.default.fileExists(atPath: dir + "/" + $0) }
+    }
+
     /// Whether the checkout's build script has this fork's `--work-dir` (issue #5): an upstream
     /// nxnative checkout, or a ZIP of an older release, stops with "unrecognized arguments" when the
     /// app passes it. Read from the script's own argparse rather than assumed — the option is the
     /// fork's, not upstream's.
     nonisolated static func repoSupportsWorkDir(_ dir: String) -> Bool {
-        let script = dir + "/scripts/build_ipa_from_nsp.py"
+        let script = dir + "/" + buildScript
         guard let text = try? String(contentsOfFile: script, encoding: .utf8) else { return false }
         return text.contains("'--work-dir'") || text.contains("\"--work-dir\"")
     }
@@ -335,6 +348,8 @@ final class BuildModel: ObservableObject {
     }
     /// The commits the automatic update brought when the app opened; the library's activity line names them. nil: none.
     @Published var autoPulled: Int?
+    /// A copy without .git was connected to git and brought to the current version when the app opened (adoptAtLaunch).
+    @Published var autoAdopted = false
 
     nonisolated static func gitBinary() -> String? {
         for c in ["/usr/bin/git", "/opt/homebrew/bin/git", "/usr/local/bin/git"]
@@ -482,31 +497,88 @@ final class BuildModel: ObservableObject {
         branch.trimmingCharacters(in: .whitespacesAndNewlines) == "main" && status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// The local branch that keeps a ZIP copy as it was when it is connected to git.
+    nonisolated static func zipCopyBranch(date: Date = Date()) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"
+        return "zip-copy-" + f.string(from: date)
+    }
+
+    /// What the launch does with the configured repository when it is a copy without .git (#87: a ZIP copy never updated
+    /// itself, so its build tools were older than the app).
+    enum ZipAdoption: Equatable { case notNeeded, adopt, waitsForBuild, autoUpdateOff }
+
+    /// Pure: adopt a valid checkout without .git into git, but never while a build runs (or another repository task),
+    /// and not when the player turned the automatic update off.
+    nonisolated static func zipAdoption(isRepo: Bool, isGit: Bool, buildRunning: Bool, repoBusy: Bool, autoUpdate: Bool) -> ZipAdoption {
+        guard isRepo, !isGit else { return .notNeeded }
+        if buildRunning || repoBusy { return .waitsForBuild }
+        return autoUpdate ? .adopt : .autoUpdateOff
+    }
+
+    /// The launch-time step for a ZIP copy; a git checkout is left to checkRepoUpdates. Settings and the library's
+    /// activity line say what happened.
+    func adoptAtLaunch(remote: String = BuildModel.repoURL) {
+        switch Self.zipAdoption(isRepo: repoOK, isGit: repoIsGit, buildRunning: running, repoBusy: repoBusy, autoUpdate: autoUpdateRepo) {
+        case .notNeeded: break
+        case .waitsForBuild: repoStatus = t("repo.zipWaits")
+        case .autoUpdateOff: break   // Settings says so next to the repository (repo.zipNoAuto): the player chose this
+        case .adopt:
+            if Self.gitBinary() == nil { repoStatus = t("repo.gitMissing") }
+            else { adoptRepoAsGit(automatic: true, remote: remote) }
+        }
+    }
+
     /// A ZIP copy has no .git: adopt it into git in place (init, remote, fetch, checkout) so the
-    /// update buttons work and the folder keeps its path. A ZIP copy carries no local changes, and
-    /// the checkout resets it to origin/main — the build's own files live outside the repository.
-    func adoptRepoAsGit() {
+    /// update buttons work and the folder keeps its path. The copy may hold the player's own edits (a tweaked game
+    /// profile), and the checkout resets every tracked file to origin/main, so the copy is recorded first: after the
+    /// fetch, the files of the copy that origin/main also has are committed on the local branch `zip-copy-<date>`
+    /// (fixed local author, no git identity needed). Only those paths: a build folder or any other file that origin/main
+    /// does not track is never committed (and the checkout leaves such files where they are). The build's own files live
+    /// outside the repository.
+    /// `automatic`: the launch-time adoption (adoptAtLaunch); `remote` is GitHub unless a test points it at a local repository.
+    func adoptRepoAsGit(automatic: Bool = false, remote: String = BuildModel.repoURL) {
         guard !running, !repoBusy, repoOK, !repoIsGit, let git = Self.gitBinary() else { return }
         repoBusy = true; repoStatus = t("repo.adopting")
         let dir = repoPath
         DispatchQueue.global().async {
             var out = "", ok = true
-            for args in [["init"], ["remote", "add", "origin", Self.repoURL],
-                         ["fetch", "--depth", "1", "origin", "main"],
-                         ["checkout", "-f", "-B", "main", "origin/main"]] {
+            let branch = Self.zipCopyBranch()
+            func run(_ args: [String]) -> (ok: Bool, out: String) {
                 let r = Self.runQuiet([git, "-C", dir] + args, env: Self.gitEnv())
                 out += "$ git \(args.joined(separator: " "))\n\(r.out)\n"
-                if !r.ok { ok = false; break }
+                return r
+            }
+            // Nothing in the folder changes before the fetch has worked, so an offline failure leaves the copy as it was.
+            ok = run(["init"]).ok && run(["remote", "add", "origin", remote]).ok && run(["fetch", "--depth", "1", "origin", "main"]).ok
+            if ok {
+                let tree = run(["ls-tree", "-r", "-z", "--name-only", "origin/main"])
+                let present = tree.out.split(separator: "\0").map(String.init).filter { FileManager.default.fileExists(atPath: dir + "/" + $0) }
+                let list = NSTemporaryDirectory() + "nspb-zip-paths-\(UUID().uuidString.prefix(8)).txt"
+                defer { try? FileManager.default.removeItem(atPath: list) }
+                let identity = ["-c", "user.name=NX2Apple", "-c", "user.email=nx2apple@localhost", "-c", "commit.gpgsign=false"]
+                ok = tree.ok
+                    && run(["symbolic-ref", "HEAD", "refs/heads/" + branch]).ok
+                    && ((try? Data(present.joined(separator: "\0").utf8).write(to: URL(fileURLWithPath: list))) != nil)
+                    && run(["add", "--pathspec-from-file=" + list, "--pathspec-file-nul"]).ok
+                    && run(identity + ["commit", "--allow-empty", "-m", "The ZIP copy as it was before it was connected to git"]).ok
+                    && run(["checkout", "-f", "-B", "main", "origin/main"]).ok
             }
             if ok { _ = Self.runQuiet([git, "-C", dir, "branch", "--set-upstream-to=origin/main", "main"], env: Self.gitEnv()) }   // checkout -B usually set it
+            // A failed adoption (offline) must not leave the .git that `git init` made: the copy would count as a
+            // checkout from then on, and neither the launch nor the button would try again. The guard above
+            // means there was no .git before, so this removes only what this call created.
+            if !ok { try? FileManager.default.removeItem(atPath: dir + "/.git") }
             DispatchQueue.main.async {
                 self.repoBusy = false
                 self.append(out + "\n")
-                if self.repoIsGit {
-                    self.repoStatus = self.t("repo.adopted")
-                    self.checkRepoUpdates()
+                if ok && self.repoIsGit {
+                    // the checkout is origin/main as just fetched: up to date, nothing left to pull
+                    self.repoBehind = 0
+                    self.repoStatus = String(format: self.t(automatic ? "repo.adoptedAuto" : "repo.adopted"), branch)
+                    if automatic { self.autoAdopted = true }
                 } else {
-                    self.repoStatus = self.t("repo.adoptFail")
+                    self.repoStatus = self.t(automatic ? "repo.adoptFailAuto" : "repo.adoptFail")
                 }
             }
         }
@@ -924,6 +996,12 @@ final class BuildModel: ObservableObject {
         // empty, and the old fallback was Apple's /usr/bin/python3 (3.9), which the script then
         // rejected with "require Python 3.12 or newer" whatever the machine actually had (#53).
         let py = pythonPath.isEmpty ? Self.findPython().path : pythonPath
+        // The tools this app runs, before a build that takes an hour finds one missing at its last step (#87)
+        let missing = Self.missingTools(in: repoPath)
+        if !missing.isEmpty {
+            fail(String(format: t("msg.toolsOld"), missing.joined(separator: ", ")))
+            return
+        }
 
         // One folder when everything lives together; otherwise a staging folder of symlinks. A folder
         // that holds other games too (a ROMs folder with one file per game) is staged as well: the
@@ -999,7 +1077,7 @@ final class BuildModel: ObservableObject {
                 return
             }
         }
-        var args = [repoPath + "/scripts/build_ipa_from_nsp.py", inputDir, "-k", keysPath,
+        var args = [repoPath + "/" + Self.buildScript, inputDir, "-k", keysPath,
                     "--progress", "json"]
         // A compatibility switch the player turned on: written to a small env file the pipeline
         // copies into the app bundle (main.m sets one variable per line at boot). Only for an IPA;
@@ -1484,7 +1562,7 @@ final class BuildModel: ObservableObject {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: pythonPath.isEmpty ? "/usr/bin/python3" : pythonPath)
         // dest/romfs.img: one file, which main.m's per-game lookup takes before any folder.
-        p.arguments = [repoPath + "/dm/tools/romfs_image.py", "--reuse", romfs, dest + "/romfs.img"]
+        p.arguments = [repoPath + "/" + Self.romfsImageTool, "--reuse", romfs, dest + "/romfs.img"]
         p.environment = ["PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "PYTHONPATH": repoPath + "/dm/tools"]
         Self.inOwnGroup(p, python: p.executableURL!.path)
         let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
@@ -2678,10 +2756,15 @@ struct BuilderView: View {
                 .font(.manrope(12)).padding(.horizontal, 18).padding(.bottom, 12)
             }
             if m.repoOK, !m.repoIsGit {
-                Text(m.t("repo.noGit")).font(.manrope(12)).foregroundStyle(.secondary)
+                Text(m.t(m.autoUpdateRepo ? "repo.noGit" : "repo.zipNoAuto")).font(.manrope(12)).foregroundStyle(.secondary)
                     .padding(.horizontal, 18).padding(.bottom, 12)
             }
-            if m.repoOK, m.repoIsGit {
+            if m.repoOK, !BuildModel.missingTools(in: m.repoPath).isEmpty {
+                Text(String(format: m.t("repo.toolsOld"), BuildModel.missingTools(in: m.repoPath).joined(separator: ", ")))
+                    .font(.manrope(12)).foregroundStyle(LauncherPalette.building)
+                    .padding(.horizontal, 18).padding(.bottom, 12)
+            }
+            if m.repoOK {   // a ZIP copy too: its adoption at launch follows this switch
                 divider
                 row(m.t("repo.auto"), detail: m.t("repo.autoNote")) {
                     Toggle("", isOn: $m.autoUpdateRepo).labelsHidden().toggleStyle(LauncherSwitchStyle())

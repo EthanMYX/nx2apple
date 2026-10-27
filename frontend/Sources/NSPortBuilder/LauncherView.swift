@@ -91,7 +91,7 @@ struct ContentView: View {
             if performStartupChecks { library.discover(); fetchArtwork(); m.refreshDevices(); checkTools() }
             if performStartupChecks {
                 m.checkDeps()
-                if m.repoOK && m.repoIsGit { m.checkRepoUpdates(silent: true) }
+                if m.repoOK && m.repoIsGit { m.checkRepoUpdates(silent: true) } else { m.adoptAtLaunch() }
                 m.checkAppUpdate(silent: true)
                 BuildNotifier.shared.watch(m, library: library)   // BuildNotifications.swift
             }
@@ -519,6 +519,11 @@ struct ContentView: View {
                         // The automatic update when the app opened (BuildModel.autoPull): the build tools are the current ones
                         Circle().fill(LauncherPalette.ready).frame(width: 6, height: 6).padding(.leading, 10)
                         Text(String(format: m.t("library.toolsUpdated"), n)).font(.manrope(13)).foregroundStyle(.secondary)
+                    }
+                    if m.autoAdopted {
+                        // A ZIP copy connected to git and updated when the app opened (BuildModel.adoptAtLaunch)
+                        Circle().fill(LauncherPalette.ready).frame(width: 6, height: 6).padding(.leading, 10)
+                        Text(m.t("library.toolsAdopted")).font(.manrope(13)).foregroundStyle(.secondary)
                     }
                     Spacer()
                     if let staged = m.appStaged {
