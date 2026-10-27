@@ -705,10 +705,10 @@ final class LibraryTests: XCTestCase {
         model.slots[0].paths = []
         library.selectedID = library.games.first?.id
         func capture(_ name: String, width: CGFloat = 1440, height: CGFloat = 1024, page: LauncherPage = .library, activeID: UUID? = nil, empty: Bool = false,
-                     search: String? = nil, older: Set<UUID> = []) throws {
+                     search: String? = nil, older: Set<UUID> = [], manageOpen: Bool = false, padRing: Bool = false) throws {
             let store = empty ? GameLibrary(file: temporary.appendingPathComponent("empty.json")) : library
             let view = ContentView(model: model, library: store, initialPage: page, activeBuildID: activeID, performStartupChecks: false, search: search,
-                                   olderTools: older)
+                                   olderTools: older, manageOpen: manageOpen, padRing: padRing)
             let host = NSHostingView(rootView: view)
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
                                   styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
@@ -725,6 +725,9 @@ final class LibraryTests: XCTestCase {
         try capture("library")
         try capture("library-search", search: "zel")
         try capture("library-small", width: 900, height: 680)
+        try capture("manage-menu", manageOpen: true)   // the Manage menu open, mouse look
+        try capture("manage-menu-pad", manageOpen: true, padRing: true)   // opened by the controller: the ring on the first row
+        try capture("manage-menu-small", width: 900, height: 680, manageOpen: true, padRing: true)
         try capture("library-fullscreen", width: 2000, height: 1125)   // the cards at their widest: the row must fit under the hero
         try capture("empty", empty: true)
         try capture("build", page: .builds)
