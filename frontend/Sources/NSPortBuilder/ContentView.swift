@@ -756,9 +756,29 @@ final class BuildModel: ObservableObject {
     /// pruning the build folders this pipeline itself writes so a rescan is not slow.
     func scan(folder: String) {
         gameDir = folder
-        let fm = FileManager.default
-        var base: [(String, Int)] = [], update: [(String, Int, Int)] = [], dlc: [String] = []
+        let found = Self.classify(Self.inputFiles(in: folder))
+        updateSlot("base") { $0.paths = found.base.map { [$0] } ?? []; $0.problem = found.base == nil ? "data.noBase" : "" }
+        updateSlot("update") { $0.paths = found.update.map { [$0] } ?? []; $0.problem = "" }
+        updateSlot("dlc") { $0.paths = found.dlc; $0.problem = "" }
+        updateSlot("keys") { $0.paths = found.keys.map { [$0] } ?? []; $0.problem = "" }
+        if !found.anyGame {
+            updateSlot("base") { $0.problem = "data.noNsp" }
+        }
+    }
+
+    /// What a set of files holds for the four slots (`classify`).
+    struct FoundInputs: Equatable {
+        var base: String?
+        var update: String?
+        var dlc: [String] = []
         var keys: String?
+        var anyGame: Bool { base != nil || update != nil || !dlc.isEmpty }
+    }
+
+    /// The files under a folder, pruning the build folders this pipeline itself writes so a rescan is not slow.
+    nonisolated static func inputFiles(in folder: String) -> [String] {
+        let fm = FileManager.default
+        var files: [String] = []
         var seen = 0
         let enumerator = fm.enumerator(atPath: folder)
         while let rel = enumerator?.nextObject() as? String {
@@ -775,32 +795,36 @@ final class BuildModel: ObservableObject {
                 if low == "archive" || low == "xcode" || low.hasSuffix("_build") || low.hasSuffix("_survey") { enumerator?.skipDescendants() }
                 continue
             }
-            if keys == nil && (low == "prod.keys" || low.hasSuffix(".keys")) { keys = path; continue }
-            guard low.hasSuffix(".nsp") || low.hasSuffix(".xci") else { continue }
-            let size = (try? fm.attributesOfItem(atPath: path))?[.size] as? Int ?? 0
+            files.append(path)
+        }
+        return files
+    }
+
+    /// NSP/XCI (and their compressed NSZ/XCZ) sorted by the title ID in the file name, plus the first prod.keys.
+    /// Shared by Choose game folder and files dropped on the Builds page.
+    nonisolated static func classify(_ files: [String]) -> FoundInputs {
+        var base: [(String, Int)] = [], update: [(String, Int, Int)] = [], dlc: [String] = []
+        var found = FoundInputs()
+        for path in files {
+            let name = (path as NSString).lastPathComponent
+            let low = name.lowercased()
+            if found.keys == nil && (low == "prod.keys" || low.hasSuffix(".keys")) { found.keys = path; continue }
+            guard ["nsp", "xci", "nsz", "xcz"].contains((low as NSString).pathExtension) else { continue }
+            let size = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int ?? 0
             guard size > 0 else { continue }   // an incomplete download leaves 0-byte files behind
-            guard let tid = Self.titleID(name) else { continue }   // a name without [title ID] cannot be classified
+            guard let tid = titleID(name) else { continue }   // a name without [title ID] cannot be classified
             switch tid & 0xFFF {
             case 0: base.append((path, size))
-            case 0x800: update.append((path, size, Self.updateVersion(name)))
+            case 0x800: update.append((path, size, updateVersion(name)))
             default: dlc.append(path)
             }
         }
         // several bases happen when a folder holds a repack beside the original: the largest wins
-        updateSlot("base") {
-            $0.paths = base.sorted { $0.1 > $1.1 }.prefix(1).map(\.0)
-            $0.problem = base.isEmpty ? "data.noBase" : ""
-        }
+        found.base = base.sorted { $0.1 > $1.1 }.first?.0
         // several updates: the newest [vN] is the one a profile would pack
-        updateSlot("update") {
-            $0.paths = update.sorted { $0.2 > $1.2 }.prefix(1).map(\.0)
-            $0.problem = ""
-        }
-        updateSlot("dlc") { $0.paths = dlc.sorted(); $0.problem = "" }
-        updateSlot("keys") { $0.paths = keys.map { [$0] } ?? []; $0.problem = "" }
-        if base.isEmpty && update.isEmpty && dlc.isEmpty {
-            updateSlot("base") { $0.problem = "data.noNsp" }
-        }
+        found.update = update.sorted { $0.2 > $1.2 }.first?.0
+        found.dlc = dlc.sorted()
+        return found
     }
 
     /// The [vN] in a file name, 0 when absent — used to pick the newest of several updates.
@@ -2035,6 +2059,7 @@ struct BuilderView: View {
         .onChange(of: padFocus.focused) { id in   // a controller's focus on this page scrolls into view
             if let id, id.hasPrefix("set.") { withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .center) } }
         }
+        .modifier(GameFilesDrop(enabled: !settings && !m.running, label: m.t("drop.hint")) { m.take(dropped: $0) })   // DropFiles.swift
         }
         .buttonStyle(LauncherSecondaryButtonStyle())
     }
