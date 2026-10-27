@@ -2007,6 +2007,7 @@ struct BuilderView: View {
     var controlChanges = 0
     @State private var extrasOpen = false
     @State private var logOpen = false
+    @State private var keyCheck: KeyCheck.Outcome?   // prod.keys against the chosen files (KeyCheck.swift)
     @EnvironmentObject private var padFocus: PadFocus
 
     var body: some View {
@@ -2157,7 +2158,10 @@ struct BuilderView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            ForEach(m.slots.filter { !$0.optional }, id: \.id) { s in divider; slotRow(s) }
+            ForEach(m.slots.filter { !$0.optional }, id: \.id) { s in
+                divider; slotRow(s)
+                if s.id == "keys", let keyCheck { KeyCheckLine(outcome: keyCheck, t: m.t) }
+            }
             divider
             disclosure(m.t("build.options"), isOpen: extrasOpen) { extrasOpen.toggle() }
             if extrasOpen {
@@ -2170,6 +2174,9 @@ struct BuilderView: View {
                     if d.runModal() == .OK, let u = d.url { m.outDir = u.path }
                 }
             }
+        }
+        .task(id: KeyCheck.Inputs(keys: m.keysPath, files: [m.basePath, m.updatePath] + m.dlcPaths)) {
+            keyCheck = await KeyCheck.runDetached(KeyCheck.Inputs(keys: m.keysPath, files: [m.basePath, m.updatePath] + m.dlcPaths))
         }
     }
 
