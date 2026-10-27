@@ -1058,22 +1058,22 @@ final class BuildModel: ObservableObject {
                 if status.terminationStatus == 0 {
                     self.markAllDone()
                     if self.target == "mac-app" {
-                        // The .app keeps its RomFS inside (self-contained, double-clickable), and
-                        // the archive step also writes games/<id>/romfs.img beside it. That folder
-                        // arms the launcher's save relocation (saves beside the game) and is the
-                        // copy for a phone or an external drive; skipping it left every Mac build
-                        // without games/, so the launcher never treated the folder as a library
-                        // and saves stayed in ~/Library (the rebuild test).
+                        // The .app is self-contained (its RomFS is inside), and the marker file
+                        // beside it (.nx2apple-library, a dot file the Finder hides) tells the
+                        // game's launcher that this folder is a library: its saves and log live
+                        // here, and they follow the folder if it moves. No image copy — the .app
+                        // already carries one, and a second multi-GB file was pure duplication.
                         let made = !self.macAppPath.isEmpty &&
                                    FileManager.default.fileExists(atPath: self.macAppPath)
-                        guard made else {
-                            self.done = false
-                            self.doneNote = self.t("msg.macAppMissing")
-                            self.running = false
-                            self.cleanupStaging()
-                            return
+                        self.done = made
+                        self.doneNote = self.t(made ? "msg.macAppDone" : "msg.macAppMissing")
+                        if made {
+                            try? Data().write(to: URL(fileURLWithPath:
+                                (self.macAppPath as NSString).deletingLastPathComponent +
+                                "/.nx2apple-library"))
                         }
-                        self.packArchive(workDir: self.effectiveWorkDir)   // finishes the build when done
+                        self.running = false
+                        self.cleanupStaging()
                     } else if self.installsDirectly {
                         // The same archive as for sideloading, then the app without the game files, then the archive into its Documents
                         self.packArchive(workDir: self.effectiveWorkDir) { self.signAndInstall(archive: $0) }

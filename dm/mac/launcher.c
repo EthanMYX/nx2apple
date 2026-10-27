@@ -151,18 +151,21 @@ int main(void) {
         // never exists — and the migration never ran (the report: saves stayed in ~/Library).
         *strrchr(appdir, '/') = 0; *strrchr(appdir, '/') = 0;
         *strrchr(appdir, '/') = 0; *strrchr(appdir, '/') = 0;
-        char probe[PATH_MAX]; snprintf(probe, sizeof probe, "%s/games", appdir);
+        // The marker file the Mac front end writes beside the .app (a dot file, so the Finder hides
+        // it): this folder is a game library, and the game's saves and log live in it. DM_ROOT (the
+        // learned shader state, env.txt), temp/ and everything else stay under ~/Library — only
+        // what is needed and reused comes along, so the library folder stays lean.
+        char probe[PATH_MAX]; snprintf(probe, sizeof probe, "%s/.nx2apple-library", appdir);
         if (!stat(probe, &st)) {
             snprintf(save, sizeof save, "%s/save/%s", appdir, id);
             snprintf(logs, sizeof logs, "%s/log", appdir);
-            snprintf(temp, sizeof temp, "%s/temp/%s", appdir, id);
-            // First run after this change: bring the old saves and log across rather than starting
-            // the player on an empty save slot. Copied, not moved — an older build of the same app
+            // First run after this change: bring the old saves across rather than starting the
+            // player on an empty save slot. Copied, not moved — an older build of the same app
             // still reads the old place, and a copy is cheap next to a save.
             char oldsave[PATH_MAX], oldlog[PATH_MAX];
-            snprintf(oldsave, sizeof oldsave, "%s/Library/Application Support/nxnative/%s/save", home, id);
+            snprintf(oldsave, sizeof oldsave, "%s/save", sup);
             snprintf(oldlog, sizeof oldlog, "%s/Library/Logs/nxnative/%s.log", home, id);
-            mkdirs(save); mkdirs(logs); mkdirs(temp);
+            mkdirs(save); mkdirs(logs);
             if (dir_has_entries(oldsave) && !dir_has_entries(save)) {
                 copy_tree(oldsave, save);
                 fprintf(stderr, "launcher: saves copied from %s to %s (they now live with the game)\n", oldsave, save);
