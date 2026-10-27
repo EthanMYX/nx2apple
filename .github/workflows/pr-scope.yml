@@ -22,7 +22,9 @@ jobs:
   check:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # the merge base of the PR and its base, for the three-dot diff below
 
       - name: Files the sync protects or never overwrites
         id: known
@@ -47,7 +49,9 @@ jobs:
           BASE="${{ github.event.pull_request.base.sha }}"
           HEAD="${{ github.event.pull_request.head.sha }}"
           git fetch --no-tags origin "$BASE" "$HEAD" 2>/dev/null || true
-          CHANGED=$(git diff --name-only --diff-filter=d "$BASE" "$HEAD" | sort -u)
+          # Three dots: the PR's own changes since it left the base (the checkout keeps the history for the merge base). Two dots
+          # compared the base's tip with the PR's head, so every commit main gained after the PR branched counted as the PR's
+          CHANGED=$(git diff --name-only --diff-filter=d "$BASE"..."$HEAD" | sort -u)
           at_risk=""
           for f in $CHANGED; do
             case "$f" in
