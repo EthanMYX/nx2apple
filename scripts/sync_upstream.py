@@ -67,7 +67,7 @@ def blob(rev, path):
 
 def upstream_changes(old, new):
     """(kind, path) for every vendored file that differs, kind in AM D; plus an A for every vendored
-    file upstream has that the fork's tree lacks. The diff alone only sees files that changed between
+    file upstream has that the fork's tree lacks, and an M for an upstream executable that lost its x bit here. The diff alone only sees files that changed between
     the two refs, so a file the first sync missed never arrived: docs/geometry-metal-research.md (which
     game notes link to) and 34 of docs/images, until test_docs.py found the dead links."""
     out = git('diff', '--name-status', old, new, '--', *VENDORED).splitlines()
@@ -77,9 +77,12 @@ def upstream_changes(old, new):
         kind, path = parts[0][0], parts[-1]
         changes.append((kind, path))
     named = {p for _, p in changes}
-    for path in git('ls-tree', '-r', '--name-only', new, '--', *VENDORED).splitlines():
-        if path not in named and path not in OURS and not (REPO / path).exists():
-            changes.append(('A', path))
+    for line in git('ls-tree', '-r', new, '--', *VENDORED).splitlines():
+        meta, path = line.split('\t', 1)
+        if path in named or path in OURS: continue
+        dest = REPO / path
+        if not dest.exists(): changes.append(('A', path))
+        elif meta.split()[0] == '100755' and not os.access(dest, os.X_OK): changes.append(('M', path))   # an executable that lost its x bit
     return changes
 
 # ---- the fork's patches. Each is (name, already-marker, [(old, new), ...]); a patch whose
@@ -951,11 +954,19 @@ def done(name, t=None):
     say(f'  + {name}')
     return t
 
+def upstream_mode(rev, path):
+    """The file's git mode upstream ('100755' for an executable), None when it is not there."""
+    out = git('ls-tree', rev, '--', path).split()
+    return out[0] if out else None
+
 def take_from_upstream(rev, path, dest):
     data = blob(rev, path)
     if data is None: fail(f'{path}: not in upstream {rev}'); return
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(data)
+    # The mode too: written as bytes, an executable came out 0644, and the fork's spirv-cross binary, its build.sh and six
+    # scripts lost their x bit (test_spirv_cross_pin: Permission denied running the committed spirv-cross)
+    dest.chmod(0o755 if upstream_mode(rev, path) == '100755' else 0o644)
 
 def verify(skip_build):
     say('--- verify ---')
