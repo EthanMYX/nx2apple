@@ -376,9 +376,13 @@ class MainWindow(QMainWindow):
             h = QHBoxLayout(row)
             h.setContentsMargins(0, 0, 0, 0)
             h.setSpacing(6)
-            mark = QLabel('●' if d.ok else ('◐' if d.state is DepState.OLD else '✕'))
+            # An optional tool that is missing reads as a muted ○, not a red ✕: it does not block
+            # the build in front of the player, and the red row made a complete Metal toolchain look
+            # broken (the report's screenshot: spirv-cross and glslangValidator, both OpenGL-only).
+            optional_missing = not d.ok and not getattr(d, 'required', True)
+            mark = QLabel('●' if d.ok else ('◐' if d.state is DepState.OLD else ('○' if optional_missing else '✕')))
             mark.setFixedWidth(14)
-            mark.setStyleSheet(f'color: {GREEN if d.ok else (ORANGE if d.state is DepState.OLD else RED)};')
+            mark.setStyleSheet(f'color: {GREEN if d.ok else (MUTED if optional_missing else (ORANGE if d.state is DepState.OLD else RED))};')
             h.addWidget(mark)
             name = QLabel(self.m.t(d.title_key))
             name.setFixedWidth(140)

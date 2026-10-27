@@ -940,11 +940,12 @@ def probe_link(sdk: Path) -> tuple[bool, str]:
         c = Path(td) / 'probe.c'
         out = Path(td) / 'probe'
         c.write_text(src, encoding='utf-8')
+        # --ld-path names the linker directly. -fuse-ld=lld + PATH prepend worked on the machines
+        # that probed green, but the report's machine failed with exit 1 and no output — on Windows
+        # clang's linker lookup has more moving parts (PATHEXT, the llvm-mingw driver config), so
+        # name the binary and let the failure say what actually went wrong.
         cmd = [str(clang), '-target', f'arm64-apple-ios{IOS_DEPLOYMENT}', '-isysroot', str(sdk),
-               '-fuse-ld=lld', '-o', str(out), str(c)]
-        # clang finds ld64.lld by name; give it the folder we created the copy in
-        env = dict(os.environ)
-        env['PATH'] = str(lld.parent) + os.pathsep + env.get('PATH', '')
+               '-fuse-ld=lld', f'--ld-path={lld}', '-o', str(out), str(c)]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=180, env=env,
                                **no_window())
@@ -957,7 +958,7 @@ def probe_link(sdk: Path) -> tuple[bool, str]:
             # missing", not "the linker is bad" — the report's "link failed: no output" carried
             # neither, because an empty output tail replaced the code
             tail = ((r.stderr or r.stdout or '').strip().splitlines() or ['(no output)'])[-1]
-            return False, f'link exit {r.returncode} (0x{r.returncode & 0xFFFFFFFF:08x}): {tail[:200]}'
+            return False, f'link exit {r.returncode} (0x{r.returncode & 0xFFFFFFFF:08x}): {tail[:400]}'
         try:
             data = out.read_bytes()
         except OSError as e:
