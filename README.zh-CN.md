@@ -21,6 +21,11 @@
 
 <img src="frontend/screenshots/hero-features.png" width="100%" alt="NX2Apple — Switch 游戏装进 iPhone 和 Mac">
 
+#### 🆕 最近重点更新
+
+- **全新 GUI**：Mac 端启动器来临，像管理 Switch 一样管理你的游戏库
+- **存档自由**：Mac 端各游戏存档及日志在游戏库文件夹统一管理
+- **iPhone 端游戏自由**：iOS 端终于可将游戏资源 .img 文件放在移动硬盘中加载
 
 一个 macOS App 拿你自己导出的游戏文件，点几下就把整件事做完——解包、为 Apple 芯片重写游戏代码、把
 shader 翻译成 Metal、打包出装得进手机的瘦身 IPA 和分片 RomFS 归档（16 GB 的大作也装得上），最后告诉

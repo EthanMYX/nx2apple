@@ -21,6 +21,11 @@
 
 <img src="frontend/screenshots/hero-features-en.png" width="100%" alt="NX2Apple — Switch games on iPhone and Mac">
 
+#### 🆕 Latest highlights
+
+- **A brand-new GUI** — the Mac launcher is here: manage your game library the way you manage a Switch.
+- **Saves, freed** — every Mac game's saves and logs live together in the game library folder.
+- **iPhone game data, freed** — the game's `.img` data finally loads straight from an external drive on iOS.
 
 A macOS app takes your own game dumps and does the whole thing with a few clicks — unpack, rewrite
 the game's code for Apple silicon, translate its shaders to Metal, pack a slim IPA plus a sharded
