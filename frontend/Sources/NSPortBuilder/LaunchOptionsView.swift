@@ -1,15 +1,20 @@
+import AppKit
 import SwiftUI
 
 /// A game's launch options: the settings its Mac app was packed with (dm/launcher.json), drawn as the
-/// iPhone launcher draws them, one screen grouped by section. Play passes them to the app as its environment.
+/// iPhone launcher draws them, grouped by section. The basic settings come first, and the rest
+/// under Advanced settings. Play passes them to the app as its environment.
 struct LaunchOptionsView: View {
     @ObservedObject var m: BuildModel
     @ObservedObject var library: GameLibrary
     let gameID: UUID
     @Environment(\.dismiss) private var dismiss
+    @State private var advancedOpen = false
 
     private var game: LibraryGame? { library.games.first { $0.id == gameID } }
-    private var settings: [LaunchSetting]? { game.flatMap { LaunchSetting.read(app: $0.appPath) } }
+    private var settings: [LaunchSetting]? {
+        game.flatMap { LaunchSetting.read(app: $0.appPath) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -24,20 +29,23 @@ struct LaunchOptionsView: View {
             if let settings, !settings.isEmpty, let game {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
-                        ForEach(sections(settings), id: \.self) { section in
-                            let rows = settings.filter { $0.sectionTitle == section }
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text(m.t("launch.section." + section)).font(.manrope(15, .semibold)).foregroundStyle(.secondary)
-                                    .padding(.leading, 2)
-                                VStack(spacing: 0) {
-                                    ForEach(rows) { s in
-                                        row(s, game)
-                                        if s.id != rows.last?.id { Divider().opacity(0.25).padding(.leading, 18) }
+                        groups(settings.filter(\.isBasic), game)
+                        let advanced = settings.filter { !$0.isBasic }
+                        if !advanced.isEmpty {
+                            card {
+                                Button { withAnimation(.easeInOut(duration: 0.18)) { advancedOpen.toggle() } } label: {
+                                    HStack(spacing: 8) {
+                                        Text(m.t("launch.advanced")).font(.manrope(14, .medium))
+                                        Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold)).foregroundStyle(.secondary)
+                                            .rotationEffect(.degrees(advancedOpen ? 90 : 0))
+                                        Spacer()
+                                        Text(String(format: m.t("launch.advancedCount"), advanced.count)).font(.manrope(12)).foregroundStyle(.secondary)
                                     }
+                                    .padding(.horizontal, 18).frame(minHeight: 52).contentShape(Rectangle())
                                 }
-                                .background(LauncherPalette.surface.opacity(0.75), in: RoundedRectangle(cornerRadius: 14))
-                                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.white.opacity(0.06)))
+                                .buttonStyle(.plain)
                             }
+                            if advancedOpen { groups(advanced, game) }
                         }
                     }
                     .padding(.horizontal, 30).padding(.bottom, 24)
@@ -70,6 +78,35 @@ struct LaunchOptionsView: View {
         .preferredColorScheme(.dark)
         .tint(LauncherPalette.cream)
     }
+
+    // ---- groups of settings ----
+
+    @ViewBuilder private func groups(_ rows: [LaunchSetting], _ game: LibraryGame) -> some View {
+        ForEach(sections(rows), id: \.self) { section in
+            let inSection = rows.filter { $0.sectionTitle == section }
+            VStack(alignment: .leading, spacing: 10) {
+                heading(m.t("launch.section." + section))
+                card {
+                    ForEach(inSection) { s in
+                        row(s, game)
+                        if s.id != inSection.last?.id { divider }
+                    }
+                }
+            }
+        }
+    }
+
+    private func heading(_ text: String) -> some View {
+        Text(text).font(.manrope(15, .semibold)).foregroundStyle(.secondary).padding(.leading, 2)
+    }
+
+    private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(spacing: 0, content: content)
+            .background(LauncherPalette.surface.opacity(0.75), in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.white.opacity(0.06)))
+    }
+
+    private var divider: some View { Divider().opacity(0.25).padding(.leading, 18) }
 
     private func sections(_ settings: [LaunchSetting]) -> [String] {
         settings.reduce(into: []) { if !$0.contains($1.sectionTitle) { $0.append($1.sectionTitle) } }

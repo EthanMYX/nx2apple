@@ -58,8 +58,13 @@ struct LaunchSetting: Decodable, Identifiable {
     let options: [[String]]?   // choice: [value, label]
     let min, max, step: Double?   // range
     let on, off: String?   // toggle: the values the variable takes
+    /// "basic" for a setting shown first (settings.tsv's level column, seedds/nxnative#399); without it, `basicByDefault` decides.
+    var level: String? = nil
     var id: String { env }
     var sectionTitle: String { section ?? "Game" }
+    /// The rows the sheet shows first, as seedds/nxnative#374 groups them; the rest are under Advanced settings.
+    static let basicByDefault: Set = ["DM_FPS_TARGET", "DM_RENDER_SCALE", "DM_OPMODE", "DM_LANG", "DM_RUMBLE"]
+    var isBasic: Bool { level.map { $0 == "basic" } ?? Self.basicByDefault.contains(env) }
     var onValue: String { on ?? "1" }
     var offValue: String { off ?? "0" }
     func isDefault(_ v: String) -> Bool {   // a range compares as numbers (a slider writes 1.00 for 1.0)
@@ -75,7 +80,7 @@ struct LaunchSetting: Decodable, Identifiable {
         default: return true
         }
     }
-    enum CodingKeys: String, CodingKey { case env, kind, label, note, def = "default", section, options, min, max, step, on, off }
+    enum CodingKeys: String, CodingKey { case env, kind, label, note, def = "default", section, options, min, max, step, on, off, level }
 
     private struct File: Decodable { let settings: [LaunchSetting] }
     /// The settings a Mac app was packed with; nil for an app packed before they were.
