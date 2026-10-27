@@ -60,10 +60,14 @@ struct LaunchSetting: Decodable, Identifiable {
     let on, off: String?   // toggle: the values the variable takes
     /// "basic" for a setting shown first (settings.tsv's level column, seedds/nxnative#399); without it, `basicByDefault` decides.
     var level: String? = nil
+    /// The 3D views' base size the setting scales, docked and handheld ([width, height]); the render scale's row shows pixels with it.
+    var base: [String: [Int]]? = nil
+    /// The value that leaves the variable unset (DM_FULLSCREEN is on when it is set at all).
+    var unsetValue: String? = nil
     var id: String { env }
     var sectionTitle: String { section ?? "Game" }
     /// The rows the sheet shows first, as seedds/nxnative#374 groups them; the rest are under Advanced settings.
-    static let basicByDefault: Set = ["DM_FPS_TARGET", "DM_RENDER_SCALE", "DM_OPMODE", "DM_LANG", "DM_RUMBLE"]
+    static let basicByDefault: Set = ["DM_FPS_TARGET", "DM_RENDER_SCALE", "DM_FULLSCREEN", "DM_OPMODE", "DM_LANG", "DM_RUMBLE"]
     var isBasic: Bool { level.map { $0 == "basic" } ?? Self.basicByDefault.contains(env) }
     var onValue: String { on ?? "1" }
     var offValue: String { off ?? "0" }
@@ -80,7 +84,7 @@ struct LaunchSetting: Decodable, Identifiable {
         default: return true
         }
     }
-    enum CodingKeys: String, CodingKey { case env, kind, label, note, def = "default", section, options, min, max, step, on, off, level }
+    enum CodingKeys: String, CodingKey { case env, kind, label, note, def = "default", section, options, min, max, step, on, off, level, base }
 
     private struct File: Decodable { let settings: [LaunchSetting] }
     /// The settings a Mac app was packed with; nil for an app packed before they were.
@@ -88,6 +92,39 @@ struct LaunchSetting: Decodable, Identifiable {
         let url = URL(fileURLWithPath: app).appendingPathComponent("Contents/Resources/dm/launcher.json")
         guard let data = try? Data(contentsOf: url) else { return nil }
         return (try? JSONDecoder().decode(File.self, from: data))?.settings
+    }
+
+    /// The app's settings as the Mac shows them: the Mac-only Display mode added when the list has none (the host reads
+    /// DM_FULLSCREEN in front_mac.m; a list from settings.tsv will carry it as a platform:mac row), and the render scale's
+    /// base size from the game's profile in the repository when the list does not carry it (render_base).
+    static func forMac(app: String, titleID: String, repo: String, labels: (String) -> String) -> [LaunchSetting]? {
+        guard var list = read(app: app) else { return nil }
+        if !list.contains(where: { $0.env == "DM_FULLSCREEN" }) {
+            let display = LaunchSetting(env: "DM_FULLSCREEN", kind: "choice", label: labels("launch.display"), note: "", def: "",
+                                        section: "Game", options: [["", labels("launch.display.window")], ["1", labels("launch.display.fullscreen")]],
+                                        min: nil, max: nil, step: nil, on: nil, off: nil, unsetValue: "")
+            list.insert(display, at: (list.firstIndex { $0.env == "DM_RENDER_SCALE" }).map { $0 + 1 } ?? 0)
+        }
+        if let i = list.firstIndex(where: { $0.env == "DM_RENDER_SCALE" && $0.base == nil }), let base = renderBase(titleID: titleID, repo: repo) {
+            list[i].base = base
+        }
+        return list
+    }
+
+    /// render_base in the game's profile ("1600x900 1280x720": docked, then handheld).
+    static func renderBase(titleID: String, repo: String) -> [String: [Int]]? {
+        let path = repo + "/dm/games/" + titleID + "/game.tsv"
+        guard !repo.isEmpty, let text = try? String(contentsOfFile: path, encoding: .utf8),
+              let line = text.split(separator: "\n").first(where: { $0.hasPrefix("render_base\t") }) else { return nil }
+        let sizes = line.dropFirst("render_base\t".count).split(separator: " ").map { $0.split(separator: "x").compactMap { Int($0) } }
+        guard sizes.count == 2, sizes.allSatisfy({ $0.count == 2 }) else { return nil }
+        return ["docked": sizes[0], "handheld": sizes[1]]
+    }
+
+    /// The render scale as pixels: the base size of the console mode chosen (DM_OPMODE: 1 docked, 0 handheld) times the scale.
+    func pixels(scale: Double, docked: Bool) -> String? {
+        guard let size = base?[docked ? "docked" : "handheld"], size.count == 2 else { return nil }
+        return "\(Int((Double(size[0]) * scale).rounded()))×\(Int((Double(size[1]) * scale).rounded()))"
     }
 }
 
@@ -97,10 +134,15 @@ extension LibraryGame {
         launchOptions[s.env].flatMap { s.accepts($0) ? $0 : nil } ?? s.def
     }
 
-    /// Every setting goes into the app's environment, as the iPhone launcher sets them before the game starts.
+    /// Every setting goes into the app's environment, as the iPhone launcher sets them before the game starts; one at
+    /// its unset value (Display mode: Window) stays out.
     func launchEnvironment(_ settings: [LaunchSetting]) -> [String: String] {
-        Dictionary(uniqueKeysWithValues: settings.map { ($0.env, launchValue($0)) })
+        Dictionary(uniqueKeysWithValues: settings.compactMap { s in
+            let v = launchValue(s)
+            return s.unsetValue == v ? nil : (s.env, v)
+        })
     }
+
 }
 
 struct MacGameBundle {

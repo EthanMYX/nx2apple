@@ -13,7 +13,7 @@ struct LaunchOptionsView: View {
 
     private var game: LibraryGame? { library.games.first { $0.id == gameID } }
     private var settings: [LaunchSetting]? {
-        game.flatMap { LaunchSetting.read(app: $0.appPath) }
+        game.flatMap { LaunchSetting.forMac(app: $0.appPath, titleID: $0.titleID, repo: m.repoPath, labels: m.t) }
     }
 
     var body: some View {
@@ -29,7 +29,7 @@ struct LaunchOptionsView: View {
             if let settings, !settings.isEmpty, let game {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
-                        groups(settings.filter(\.isBasic), game)
+                        groups(settings.filter(\.isBasic), game, all: settings)
                         let advanced = settings.filter { !$0.isBasic }
                         if !advanced.isEmpty {
                             card {
@@ -45,7 +45,7 @@ struct LaunchOptionsView: View {
                                 }
                                 .buttonStyle(.plain)
                             }
-                            if advancedOpen { groups(advanced, game) }
+                            if advancedOpen { groups(advanced, game, all: settings) }
                         }
                     }
                     .padding(.horizontal, 30).padding(.bottom, 24)
@@ -81,14 +81,14 @@ struct LaunchOptionsView: View {
 
     // ---- groups of settings ----
 
-    @ViewBuilder private func groups(_ rows: [LaunchSetting], _ game: LibraryGame) -> some View {
+    @ViewBuilder private func groups(_ rows: [LaunchSetting], _ game: LibraryGame, all: [LaunchSetting]) -> some View {
         ForEach(sections(rows), id: \.self) { section in
             let inSection = rows.filter { $0.sectionTitle == section }
             VStack(alignment: .leading, spacing: 10) {
                 heading(m.t("launch.section." + section))
                 card {
                     ForEach(inSection) { s in
-                        row(s, game)
+                        row(s, game, all: all)
                         if s.id != inSection.last?.id { divider }
                     }
                 }
@@ -114,24 +114,35 @@ struct LaunchOptionsView: View {
 
     private func set(_ s: LaunchSetting, _ value: String) { library.setLaunchOption(s, value, for: gameID) }
 
-    @ViewBuilder private func row(_ s: LaunchSetting, _ game: LibraryGame) -> some View {
+    /// Docked unless the console mode chosen is handheld (DM_OPMODE 0), for the render scale's pixels.
+    private func docked(_ game: LibraryGame, _ all: [LaunchSetting]) -> Bool {
+        all.first { $0.env == "DM_OPMODE" }.map { game.launchValue($0) != "0" } ?? true
+    }
+
+    @ViewBuilder private func row(_ s: LaunchSetting, _ game: LibraryGame, all: [LaunchSetting]) -> some View {
         let value = game.launchValue(s)
+        let isDocked = docked(game, all)
+        let pixels = s.kind == "range" ? s.pixels(scale: Double(value) ?? 1, docked: isDocked) : nil
         HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(s.label).font(.manrope(14, .medium))
-                if !s.note.isEmpty {
+                if let full = s.kind == "range" ? s.pixels(scale: 1, docked: isDocked) : nil {
+                    // The render scale in pixels: the share of the game's own size in the console mode chosen
+                    Text(String(format: m.t(isDocked ? "launch.scaleOfDocked" : "launch.scaleOfHandheld"), Int(((Double(value) ?? 1) * 100).rounded()), full))
+                        .font(.manrope(12)).foregroundStyle(.secondary)
+                } else if !s.note.isEmpty {
                     Text(s.note).font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer(minLength: 12)
-            control(s, value).frame(width: LaunchControl.width, alignment: .trailing)
+            control(s, value, pixels: pixels).frame(width: LaunchControl.width, alignment: .trailing)
         }
         .padding(.horizontal, 18).padding(.vertical, 13)
         .frame(minHeight: 52)
     }
 
     /// The setting's control, filling the column every row shares (a toggle keeps its size at the column's right edge).
-    @ViewBuilder private func control(_ s: LaunchSetting, _ value: String) -> some View {
+    @ViewBuilder private func control(_ s: LaunchSetting, _ value: String, pixels: String?) -> some View {
         HStack(spacing: 10) {
             switch s.kind {
             case "choice":
@@ -146,9 +157,9 @@ struct LaunchOptionsView: View {
                 LauncherSlider(value: Double(value) ?? Double(s.def) ?? lo, range: lo...hi, step: s.step ?? 0.05) {
                     set(s, String(format: "%.2f", $0))
                 }
-                Text("\(Int(((Double(value) ?? 0) * 100).rounded()))%")
+                Text(pixels ?? "\(Int(((Double(value) ?? 0) * 100).rounded()))%")
                     .font(.manrope(13, .semibold)).monospacedDigit().foregroundStyle(.secondary)
-                    .frame(width: 44, alignment: .trailing)
+                    .frame(width: pixels == nil ? 44 : 72, alignment: .trailing)
             default:
                 Spacer(minLength: 0)
                 Toggle("", isOn: Binding(get: { value == s.onValue }, set: { set(s, $0 ? s.onValue : s.offValue) }))

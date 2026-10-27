@@ -459,8 +459,13 @@ enum L10n {
         "controls.fn.LS": ("按下左摇杆", "Left stick press"),
         "controls.fn.RS": ("按下右摇杆", "Right stick press"),
         "controls.fn.Shake": ("摇动手柄", "Shake"),
+        "launch.display": ("显示模式", "Display mode"),
+        "launch.display.window": ("窗口", "Window"),
+        "launch.display.fullscreen": ("全屏", "Fullscreen"),
         "launch.advanced": ("高级设置", "Advanced settings"),
         "launch.advancedCount": ("%ld 项", "%ld settings"),
+        "launch.scaleOfDocked": ("底座模式 %2$@ 的 %1$ld%%", "%ld%% of %@ docked"),
+        "launch.scaleOfHandheld": ("掌机模式 %2$@ 的 %1$ld%%", "%ld%% of %@ handheld"),
         "msg.archiveLog": ("归档：%@ → %@", "Archive: %@ → %@"),
     ]
 
