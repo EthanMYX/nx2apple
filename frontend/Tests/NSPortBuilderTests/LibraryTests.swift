@@ -239,6 +239,11 @@ final class LibraryTests: XCTestCase {
         let marker = temporary.appendingPathComponent("dm/tools/nx_extract/Program.cs")
         try FileManager.default.createDirectory(at: marker.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data().write(to: marker)
+        try BuildModel.requiredTools.filter { $0 != BuildModel.buildScript }.forEach { tool in   // the other files the build checks for (#87)
+            let url = temporary.appendingPathComponent(tool)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data().write(to: url)
+        }
         let script = temporary.appendingPathComponent("scripts/build_ipa_from_nsp.py")
         try FileManager.default.createDirectory(at: script.deletingLastPathComponent(), withIntermediateDirectories: true)
         try """
@@ -311,6 +316,11 @@ final class LibraryTests: XCTestCase {
         try FileManager.default.createDirectory(at: marker.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data().write(to: marker)
         let calls = temporary.appendingPathComponent("calls.txt")
+        try BuildModel.requiredTools.filter { $0 != BuildModel.buildScript }.forEach { tool in   // the other files the build checks for (#87)
+            let url = temporary.appendingPathComponent(tool)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data().write(to: url)
+        }
         let script = temporary.appendingPathComponent("scripts/build_ipa_from_nsp.py")
         try FileManager.default.createDirectory(at: script.deletingLastPathComponent(), withIntermediateDirectories: true)
         try """
@@ -460,6 +470,11 @@ final class LibraryTests: XCTestCase {
         let marker = temporary.appendingPathComponent("dm/tools/nx_extract/Program.cs")
         try FileManager.default.createDirectory(at: marker.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data().write(to: marker)
+        try BuildModel.requiredTools.filter { $0 != BuildModel.buildScript }.forEach { tool in   // the other files the build checks for (#87)
+            let url = temporary.appendingPathComponent(tool)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data().write(to: url)
+        }
         let script = temporary.appendingPathComponent("scripts/build_ipa_from_nsp.py")
         try FileManager.default.createDirectory(at: script.deletingLastPathComponent(), withIntermediateDirectories: true)
         // This is a process contract fixture, not a game build or game data.
@@ -678,6 +693,28 @@ final class LibraryTests: XCTestCase {
         try capture("build", page: .builds)
         try capture("build-small", width: 900, height: 680, page: .builds)
         try capture("settings", page: .settings)
+        do {   // #87: a ZIP copy older than the app (no romfs_image.py), without git: auto-update off, then connected at launch, then a build refused
+            let zip = temporary.appendingPathComponent("NX2Apple-0.4.5")
+            for f in ["dm/tools/nx_extract/Program.cs", BuildModel.buildScript] {
+                let url = zip.appendingPathComponent(f)
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data([0]).write(to: url)
+            }
+            let previous = (model.repoPath, model.autoUpdateRepo, model.repoStatus, model.autoAdopted, model.doneNote)
+            defer { (model.repoPath, model.autoUpdateRepo, model.repoStatus, model.autoAdopted, model.doneNote) = previous }
+            model.repoPath = zip.path
+            model.autoUpdateRepo = false
+            try capture("settings-zip-auto-off", page: .settings)
+            model.autoUpdateRepo = true
+            model.repoStatus = model.t("repo.adoptedAuto")
+            model.autoAdopted = true
+            try capture("library-adopted")
+            model.autoAdopted = false
+            model.repoStatus = ""
+            try capture("settings-zip-old-tools", page: .settings)
+            model.startBuild()   // refuses: the copy lacks romfs_image.py
+            try capture("build-tools-old", height: 1500, page: .builds)
+        }
         do {   // a released copy with an update downloaded and verified: Restart now in Settings and in the activity line
             let previous = (model.appInstallability, model.appUpdate, model.appStaged, model.appStatus)
             defer { (model.appInstallability, model.appUpdate, model.appStaged, model.appStatus) = previous }
