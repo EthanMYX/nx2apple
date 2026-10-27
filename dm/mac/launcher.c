@@ -146,7 +146,11 @@ int main(void) {
     // used the launcher's folder.
     {
         char appdir[PATH_MAX]; snprintf(appdir, sizeof appdir, "%s", exe);
-        *strrchr(appdir, '/') = 0; *strrchr(appdir, '/') = 0; *strrchr(appdir, '/') = 0;   // …/<id>.app/Contents/MacOS/<launcher> → the .app's folder
+        // Four cuts: <…>/<id>.app/Contents/MacOS/<launcher> → MacOS → Contents → <id>.app → the folder
+        // holding it. Three landed on the .app itself, so the probe looked for <id>.app/games — which
+        // never exists — and the migration never ran (the report: saves stayed in ~/Library).
+        *strrchr(appdir, '/') = 0; *strrchr(appdir, '/') = 0;
+        *strrchr(appdir, '/') = 0; *strrchr(appdir, '/') = 0;
         char probe[PATH_MAX]; snprintf(probe, sizeof probe, "%s/games", appdir);
         if (!stat(probe, &st)) {
             snprintf(save, sizeof save, "%s/save/%s", appdir, id);
@@ -163,9 +167,15 @@ int main(void) {
                 copy_tree(oldsave, save);
                 fprintf(stderr, "launcher: saves copied from %s to %s (they now live with the game)\n", oldsave, save);
             }
-            char newlog[PATH_MAX]; snprintf(newlog, sizeof newlog, "%s/%s.log", logs, id);
-            if (!stat(oldlog, &st) && stat(newlog, &st)) {
-                if (copy_file(oldlog, newlog)) fprintf(stderr, "launcher: the previous log was copied from %s\n", oldlog);
+            // The previous session's log becomes the .prev.log, as the rotation below would have
+            // it: the .log itself is opened fresh right after, and copying into it would be
+            // truncated away by that open.
+            char newprev[PATH_MAX]; snprintf(newprev, sizeof newprev, "%s/%s.prev.log", logs, id);
+            // Explicit compares, not !stat(): stat() returns -1 when the file is missing, which is
+            // truthy — reading "!" as "does not exist" here inverted the condition and skipped the
+            // copy (found by the end-to-end test below).
+            if (stat(oldlog, &st) == 0 && stat(newprev, &st) != 0) {
+                if (copy_file(oldlog, newprev)) fprintf(stderr, "launcher: the previous log was copied from %s\n", oldlog);
             }
         }
     }
