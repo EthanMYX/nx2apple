@@ -171,6 +171,9 @@ int main(void) {
     }
     snprintf(log, sizeof log, "%s/%s.log", logs, id); snprintf(prev, sizeof prev, "%s/%s.prev.log", logs, id);
     mkdirs(save); mkdirs(temp); mkdirs(logs);
+    // Say where this game reads and writes, on every start: a player checking whether their saves
+    // moved with the game should not have to know the migration rules.
+    fprintf(stderr, "launcher: saves %s\nlauncher: log %s\n", save, log);
     rename(log, prev);
     int fd = open(log, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd >= 0) { dup2(fd, 1); dup2(fd, 2); close(fd); setvbuf(stdout, NULL, _IOLBF, 0); }
