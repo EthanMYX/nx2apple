@@ -72,6 +72,7 @@ PATCHED = ('dm/host/hle_fs.c', 'dm/host/Makefile', 'dm/host/tests/Makefile', 'dm
            'dm/host/loader.c',
            'dm/ios/Sources/DmGamepad.m',
            'dm/ios/Sources/Launcher.swift',
+           'dm/ios/Sources/front_ios.m',
            'dm/ios/project.yml',
            'dm/ios/tests/test_xcode_workflow.py',
            'dm/tools/env_switches.py',
@@ -938,6 +939,12 @@ static NSString *romfs_locate(void) {
 
 MAIN_M_ENV = ('    setenv("DM_ROMFS", romfs.fileSystemRepresentation, 0);\n    setenv("DM_SAVE", [doc stringByAppendingPathComponent:@"save"].fileSystemRepresentation, 0);\n    setenv("DM_TEMP", [doc stringByAppendingPathComponent:@"temp"].fileSystemRepresentation, 0);\n    NSString *dm = [res stringByAppendingPathComponent:@"dm"];\n    setenv("DM_NVN_SHMAP", [dm stringByAppendingPathComponent:@"shader_map.tsv"].fileSystemRepresentation, 0);\n    setenv("DM_MSL_DIR", [res stringByAppendingPathComponent:@"msl"].fileSystemRepresentation, 0);\n', '    setenv("DM_ROMFS", romfs.fileSystemRepresentation, 0);\n    // Saves and scratch space: Documents/games/<id>/{save,temp} when the per-game layout is in use\n    // (so two games in one app never share a save folder), else the old Documents/{save,temp}. An\n    // env file still wins — DM_SAVE/DM_TEMP set there are already in the environment and\n    // setenv(..., 0) leaves them alone.\n    NSString *gdir = game_dir_for(dm_profile()->id);\n    // Tie the data folder to where the game files actually came from: if romfs_locate fell back to\n    // Documents/romfs, the saves must stay beside it (a game folder without romfs is not in use).\n    BOOL per_game = [romfs hasPrefix:gdir];\n    NSString *save_dir = per_game ? [gdir stringByAppendingPathComponent:@"save"] : [doc stringByAppendingPathComponent:@"save"];\n    NSString *temp_dir = per_game ? [gdir stringByAppendingPathComponent:@"temp"] : [doc stringByAppendingPathComponent:@"temp"];\n    for (NSString *d in @[save_dir, temp_dir]) [fm createDirectoryAtPath:d withIntermediateDirectories:YES attributes:nil error:nil];\n    setenv("DM_SAVE", save_dir.fileSystemRepresentation, 0);\n    setenv("DM_TEMP", temp_dir.fileSystemRepresentation, 0);\n    if (per_game) fprintf(stderr, "boot: per-game data folder %s\\n", gdir.fileSystemRepresentation);\n    NSString *dm = [res stringByAppendingPathComponent:@"dm"];\n    setenv("DM_NVN_SHMAP", [dm stringByAppendingPathComponent:@"shader_map.tsv"].fileSystemRepresentation, 0);\n    // Shader libraries: a game\'s own <gdir>/msl first (a per-game layout may carry its own), else\n    // the app\'s shared <App>/msl.\n    NSString *per_game_msl = [gdir stringByAppendingPathComponent:@"msl"];\n    NSString *msl = (per_game && [fm fileExistsAtPath:per_game_msl]) ? per_game_msl : [res stringByAppendingPathComponent:@"msl"];\n    setenv("DM_MSL_DIR", msl.fileSystemRepresentation, 0);\n')
 
+# 420047da (LNPANDY): no game data at boot is not fatal, and the launcher's Play (re)locates it (dm_locate_game_data).
+# Applied after the two per-game hunks above, so the text it replaces is what they produce.
+MAIN_M_NODATA_FN = '// DM_ROMFS plus the save/temp folders that follow its location (the per-game layout only when the\n// files came from Documents/games/<id>/). Returns NO when there is no game data yet — not fatal:\n// the launcher comes up all the same and its Game data section is where a location gets picked\n// (a transfer skipped on the Mac, or data on an external drive), and dm_locate_game_data() asks\n// again when the player presses Play. `force` lets the Play-time re-location override what boot\n// set: a location picked in the launcher this session must win, while an env file\'s DM_ROMFS /\n// DM_SAVE / DM_TEMP (set before this runs, kept only when absent) keeps winning at boot.\nstatic int set_data_env(NSString *romfs, BOOL force) {\n    if (!romfs) return 0;\n    NSFileManager *fm = NSFileManager.defaultManager;\n    NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];\n    fprintf(stderr, "boot: game files %s\\n", romfs.fileSystemRepresentation);\n    setenv("DM_ROMFS", romfs.fileSystemRepresentation, force);\n    // Saves and scratch space: Documents/games/<id>/{save,temp} when the per-game layout is in use\n    // (so two games in one app never share a save folder), else the old Documents/{save,temp}. An\n    // env file still wins at boot — DM_SAVE/DM_TEMP set there are already in the environment and\n    // setenv(..., 0) leaves them alone.\n    NSString *gdir = game_dir_for(dm_profile()->id);\n    // Tie the data folder to where the game files actually came from: if romfs_locate fell back to\n    // Documents/romfs, the saves must stay beside it (a game folder without romfs is not in use).\n    BOOL per_game = [romfs hasPrefix:gdir];\n    NSString *save_dir = per_game ? [gdir stringByAppendingPathComponent:@"save"] : [doc stringByAppendingPathComponent:@"save"];\n    NSString *temp_dir = per_game ? [gdir stringByAppendingPathComponent:@"temp"] : [doc stringByAppendingPathComponent:@"temp"];\n    for (NSString *d in @[save_dir, temp_dir]) [fm createDirectoryAtPath:d withIntermediateDirectories:YES attributes:nil error:nil];\n    setenv("DM_SAVE", save_dir.fileSystemRepresentation, force);\n    setenv("DM_TEMP", temp_dir.fileSystemRepresentation, force);\n    if (per_game) fprintf(stderr, "boot: per-game data folder %s\\n", gdir.fileSystemRepresentation);\n    return 1;\n}\n\n// front_ios.m calls this from the launcher\'s Play: (re)decide where the game data is — a location\n// picked in the launcher this session takes effect at once — and NO when there still is none, so\n// the launcher comes back instead of the game failing inside the host.\nint dm_locate_game_data(void) { return set_data_env(romfs_locate(), YES); }\n\n'
+MAIN_M_NODATA_BOOT = ('    NSString *romfs = romfs_locate();\n    if (!romfs) { fprintf(stderr, "boot: game files not found (Documents/romfs.img, Documents/romfs or <App>/romfs)\\n"); return 0; }\n    fprintf(stderr, "boot: game files %s\\n", romfs.fileSystemRepresentation);\n    setenv("DM_ROMFS", romfs.fileSystemRepresentation, 0);\n    // Saves and scratch space: Documents/games/<id>/{save,temp} when the per-game layout is in use\n    // (so two games in one app never share a save folder), else the old Documents/{save,temp}. An\n    // env file still wins — DM_SAVE/DM_TEMP set there are already in the environment and\n    // setenv(..., 0) leaves them alone.\n    NSString *gdir = game_dir_for(dm_profile()->id);\n    // Tie the data folder to where the game files actually came from: if romfs_locate fell back to\n    // Documents/romfs, the saves must stay beside it (a game folder without romfs is not in use).\n    BOOL per_game = [romfs hasPrefix:gdir];\n    NSString *save_dir = per_game ? [gdir stringByAppendingPathComponent:@"save"] : [doc stringByAppendingPathComponent:@"save"];\n    NSString *temp_dir = per_game ? [gdir stringByAppendingPathComponent:@"temp"] : [doc stringByAppendingPathComponent:@"temp"];\n    for (NSString *d in @[save_dir, temp_dir]) [fm createDirectoryAtPath:d withIntermediateDirectories:YES attributes:nil error:nil];\n    setenv("DM_SAVE", save_dir.fileSystemRepresentation, 0);\n    setenv("DM_TEMP", temp_dir.fileSystemRepresentation, 0);\n    if (per_game) fprintf(stderr, "boot: per-game data folder %s\\n", gdir.fileSystemRepresentation);\n',
+'    // No game data yet is not fatal: the launcher comes up all the same, and its Game data section\n    // is where a location gets picked; dm_locate_game_data() looks again when Play is pressed.\n    NSString *gdir = game_dir_for(dm_profile()->id);\n    NSString *romfs = romfs_locate();\n    BOOL per_game = [romfs hasPrefix:gdir];   // messaging nil is NO here: no data means the shared layout\n    if (!set_data_env(romfs, NO)) fprintf(stderr, "boot: no game data yet (Documents/romfs.img, Documents/romfs or <App>/romfs); the launcher asks for it\\n");\n')
+
 def patch_main_m(t):
     """romfs_locate + the per-game data layout in dm/ios/Sources/main.m.
 
@@ -960,6 +967,11 @@ def patch_main_m(t):
          ('#include "romfs_image.h"\n', '#include "romfs_image.h"\n#include "DataBookmark.h"\n')),
         ('romfs per-game', MAIN_M_ROMFS),
         ('per-game data dirs', MAIN_M_ENV),
+    ]
+    if 'static int set_data_env' in t: return skip('main.m (already patched)') or t
+    P += [
+        ('set_data_env', ('// Boot prerequisites (done before', MAIN_M_NODATA_FN + '// Boot prerequisites (done before')),
+        ('no game data at boot', MAIN_M_NODATA_BOOT),
     ]
     for name, (old, new) in P:
         if new in t:
@@ -1298,7 +1310,7 @@ private struct GameDataSection: View {
             DocumentPicker { url in
                 picking = false
                 if dm_store_picked_data(url) {
-                    note = "Saved. The game uses this location from the next start."
+                    note = "Saved. The game uses this location when you press Play."
                     refresh()
                 } else {
                     note = "That location could not be remembered — try a different one."
@@ -1523,6 +1535,34 @@ patch_launcher_swift = anchored(LAUNCHER_SWIFT, [
      '                    Section {\n                        HStack {\n                            Text("Memory available")',
      '                    GameDataSection()\n                    Section {\n                        HStack {\n                            Text("Memory available")'),
 ])
+# 420047da (LNPANDY): the launcher's Play asks main.m's dm_locate_game_data() where the game data is, and
+# an app with no game data yet goes back to the launcher (its Game data section) instead of a static hint.
+FRONT_IOS = 'dm/ios/Sources/front_ios.m'
+patch_front_ios = anchored(FRONT_IOS, [
+    ('locate declaration', 'int dm_locate_game_data(void);',
+     'bool dm_show_launcher(void *view_controller, void (*done)(void));   // Launcher.swift: false = no launcher (no dm/launcher.json, or DM_LAUNCHER=0)\n',
+     'bool dm_show_launcher(void *view_controller, void (*done)(void));   // Launcher.swift: false = no launcher (no dm/launcher.json, or DM_LAUNCHER=0)\n'
+     'int dm_locate_game_data(void);   // main.m: (re)decide where the game data is; NO when there still is none\n'),
+    ('hasLauncher property', '@property (nonatomic) BOOL hasLauncher;',
+     '@property (nonatomic) BOOL launched;\n',
+     '@property (nonatomic) BOOL launched;\n'
+     '@property (nonatomic) BOOL hasLauncher;   // the app has a settings screen: a failed Play goes back to it (its Game data section is the way out)\n'),
+    ('startGame locates the data', 'if (!dm_locate_game_data())',
+     '    if (self.game) return;\n',
+     '    if (self.game) return;\n'
+     '    if (!dm_locate_game_data()) {   // no game data (nothing picked, nothing in Documents): the game cannot start\n'
+     '        if (self.hasLauncher) { dm_show_launcher((__bridge void *)self, launcher_done); return; }   // back to the settings screen, whose Game data section picks a location\n'
+     '        UILabel *lb = [[UILabel alloc] initWithFrame:CGRectInset(self.view.bounds, 40, 40)];\n'
+     '        lb.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;\n'
+     '        lb.numberOfLines = 0; lb.textAlignment = NSTextAlignmentCenter; lb.textColor = UIColor.whiteColor;\n'
+     '        lb.text = @"Game files not found.\\nPut the RomFS folder into this App\'s Documents as \\"romfs\\" (Files app), then restart.";\n'
+     '        [self.view addSubview:lb]; return;\n'
+     '    }\n'),
+    ('hasLauncher at appear', 'self.hasLauncher = dm_show_launcher',
+     '    if (!dm_show_launcher((__bridge void *)self, launcher_done)) [self startGame];   // the settings screen first (Launcher.swift), when the app has one\n',
+     '    self.hasLauncher = dm_show_launcher((__bridge void *)self, launcher_done);\n'
+     '    if (!self.hasLauncher) [self startGame];   // the settings screen first (Launcher.swift), when the app has one\n'),
+])
 patch_project_yml = anchored('dm/ios/project.yml', [
     ('bridging header', 'SWIFT_OBJC_BRIDGING_HEADER',
      '      SWIFT_VERSION: "5.0"                         # Launcher.swift (SwiftUI)\n',
@@ -1664,7 +1704,7 @@ MARKERS = {
     'dm/host/tests/Makefile': 'romfs_arc.c',
     'dm/ios/tools/build_ipa.sh': 'DM_FULL_ROMFS',
     'scripts/build_ipa_from_nsp.py': '--work-dir',
-    'dm/ios/Sources/main.m': 'romfs_dir_ok',
+    'dm/ios/Sources/main.m': 'static int set_data_env',
     'dm/gfx/nvn/nvn_mtl.m': '../tex/nvn_bcdec.h',
     'dm/games/0100A00019DE0000/game.tsv': 'build	v1	1.0.137848',
     'dm/host/dm.h': 'hle_profile.h',
@@ -1680,6 +1720,7 @@ MARKERS = {
     'dm/host/loader.c': 'dm_profile()->fps_target',
     'dm/ios/Sources/DmGamepad.m': 'dm_profile()->pad_layout',
     'dm/ios/Sources/Launcher.swift': 'GameDataSection()',
+    'dm/ios/Sources/front_ios.m': 'int dm_locate_game_data(void);',
     'dm/ios/project.yml': 'SWIFT_OBJC_BRIDGING_HEADER',
     'dm/ios/tests/test_xcode_workflow.py': "'check_glslang': None",
     'dm/tools/env_switches.py': 'def verify_texts',
@@ -1712,6 +1753,7 @@ PATCHERS = {
     'dm/host/loader.c': patch_loader,
     'dm/ios/Sources/DmGamepad.m': patch_dmgamepad,
     'dm/ios/Sources/Launcher.swift': patch_launcher_swift,
+    'dm/ios/Sources/front_ios.m': patch_front_ios,
     'dm/ios/project.yml': patch_project_yml,
     'dm/ios/tests/test_xcode_workflow.py': patch_test_xcode_workflow,
     'dm/tools/env_switches.py': patch_env_switches_py,
