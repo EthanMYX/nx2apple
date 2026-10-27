@@ -77,18 +77,41 @@ final class SaveTransferTests: XCTestCase {
     private func read(_ url: URL) -> String? { (try? Data(contentsOf: url)).map { String(decoding: $0, as: UTF8.self) } }
 
     private func setUp(device: FakeDevice) -> SaveTransfer {
-        let mac = SaveTransfer.macFolder(titleID: titleID, support: temporary.appendingPathComponent("Application Support"))
-        var t = SaveTransfer(titleID: titleID, mac: mac, device: "00008150-AAAA", bundle: "com.example.game", devicectl: device.control)
+        let mac = SaveTransfer.legacyMacSave(titleID: titleID, support: temporary.appendingPathComponent("Application Support"))
+        var t = SaveTransfer(titleID: titleID, macSave: mac, device: "00008150-AAAA", bundle: "com.example.game", devicectl: device.control)
         t.scratch = temporary
         t.now = { Date(timeIntervalSince1970: 1_800_000_000) }
         return t
+    }
+
+    /// The launcher's layout: <folder>/<id>.app beside <folder>/games keeps its save in <folder>/save/<id> (launcher.c), and
+    /// reads the ~/Library save only until it has brought it across. A bundle anywhere else keeps ~/Library.
+    func testTheMacSaveFollowsTheAppWhenItsFolderHoldsGames() throws {
+        let support = temporary.appendingPathComponent("Application Support")
+        let library = temporary.appendingPathComponent("Games")
+        let app = library.appendingPathComponent("\(titleID).app")
+        try fm.createDirectory(at: app, withIntermediateDirectories: true)
+        XCTAssertNil(SaveTransfer.macSave(titleID: titleID, appPath: app.path, support: support).legacy, "no games/ beside it: ~/Library")
+        try fm.createDirectory(at: library.appendingPathComponent("games"), withIntermediateDirectories: true)
+        let paths = SaveTransfer.macSave(titleID: titleID, appPath: app.path, support: support)
+        XCTAssertEqual(paths.save.path, library.path + "/save/" + titleID)
+        XCTAssertEqual(SaveTransfer.macPath("save_device", save: paths.save).path, library.path + "/save/" + titleID + "_device")
+
+        var t = SaveTransfer(titleID: titleID, macSave: paths.save, legacySave: paths.legacy, device: "00008150-AAAA", bundle: "com.example.game",
+                             devicectl: FakeDevice(temporary.appendingPathComponent("container")).control)
+        t.scratch = temporary
+        try write("old", SaveTransfer.legacyMacSave(titleID: titleID, support: support).appendingPathComponent("data.bin"), date: older)
+        XCTAssertEqual(t.readMac(), SaveTransfer.Contents(folders: ["save"], newest: older), "the ~/Library save, until the app copies it")
+        try write("new", paths.save.appendingPathComponent("data.bin"), date: newer)
+        XCTAssertEqual(t.readMac(), SaveTransfer.Contents(folders: ["save"], newest: newer), "then the one beside the app")
+        XCTAssertEqual(t.backups.path, library.path + "/save/" + titleID + "-backups")
     }
 
     private let older = Date(timeIntervalSince1970: 1_700_000_000), newer = Date(timeIntervalSince1970: 1_760_000_000)
 
     func testTheMacSaveIsTheLaunchersFolderAndItsNewestFile() throws {
         let support = temporary.appendingPathComponent("Application Support")
-        XCTAssertEqual(SaveTransfer.macFolder(titleID: titleID, support: support).path, support.path + "/nxnative/" + titleID)
+        XCTAssertEqual(SaveTransfer.macSave(titleID: titleID, appPath: "", support: support).save.path, support.path + "/nxnative/" + titleID + "/save")
         let t = setUp(device: FakeDevice(temporary.appendingPathComponent("container")))
         XCTAssertEqual(t.readMac(), SaveTransfer.Contents(), "no save yet")
         try fm.createDirectory(at: t.mac.appendingPathComponent("save"), withIntermediateDirectories: true)
@@ -257,4 +280,9 @@ final class SaveTransferTests: XCTestCase {
         f.dateFormat = "yyyy-MM-dd HH.mm.ss"
         return f.string(from: Date(timeIntervalSince1970: seconds))
     }
+}
+
+private extension SaveTransfer {
+    /// The ~/Library layout's game folder, which holds save, save_device and save-backups side by side
+    var mac: URL { macSave.deletingLastPathComponent() }
 }

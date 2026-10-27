@@ -59,14 +59,16 @@ organizational unit, not the code in its name.
 ## Saves
 
 **Manage > Saves…** (a controller's Y) shows a game's save on this Mac
-(`~/Library/Application Support/nxnative/<title ID>/save`, from `dm/mac/launcher.c`) and
+(where `dm/mac/launcher.c` puts it: `<library folder>/save/<title ID>` beside the app when
+its folder holds `games/`, else `~/Library/Application Support/nxnative/<title ID>/save`;
+until the app has copied an older `~/Library` save across, that one is shown) and
 on the device the launcher installed it on (`Documents/games/<title ID>/save` in the app's
 data container, from `dm/ios/Sources/main.m`), each with the date of its newest file, and
 marks the newer one. **Mac → iPhone** and **iPhone → Mac** copy one over the other, after
 asking. The save being replaced is backed up first, beside the Mac save in
-`save-backups/<date> mac` or `<date> device` (the device's is copied to the Mac before
-anything is replaced). A game that also keeps device save data has a `save_device`
-folder beside `save` (`dm/host/hle_fs.c`), which goes along. The copy is refused while
+`<save>-backups/<date> mac` or `<date> device` (the device's is copied to the Mac before
+anything is replaced). A game that also keeps device save data has a `<save>_device`
+folder beside it (`dm/host/hle_fs.c`), which goes along. The copy is refused while
 the game runs on the Mac; close it on the device too, or it writes its own save over the
 copy later. The device side uses the install's route: `devicectl device info files` for
 the date and `devicectl device copy from` / `copy to` with the app's data container. Only

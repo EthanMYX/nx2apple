@@ -798,7 +798,7 @@ final class LibraryTests: XCTestCase {
                 .write(to: installed.appendingPathComponent("Info.plist"))
             library.recordCompletedIOS(ipa: "", archive: "", app: installed.path, device: "00008150-AAAA", for: game.id)
             let support = temporary.appendingPathComponent("Application Support")
-            let save = SaveTransfer.macFolder(titleID: game.titleID, support: support).appendingPathComponent("save/data.bin")
+            let save = SaveTransfer.legacyMacSave(titleID: game.titleID, support: support).appendingPathComponent("data.bin")
             try FileManager.default.createDirectory(at: save.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data("mac".utf8).write(to: save)
             try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -3 * 86_400)], ofItemAtPath: save.path)

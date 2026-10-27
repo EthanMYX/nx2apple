@@ -24,8 +24,9 @@ struct DeviceControl {
 /// the route the install takes (devicectl and the app's data container). The save that is replaced is backed up on the Mac
 /// first, so a copy in the wrong direction loses nothing.
 ///
-/// Where the saves are: the Mac app keeps them in ~/Library/Application Support/nxnative/<title ID>/save (dm/mac/launcher.c,
-/// DM_SAVE); the iPhone app in Documents/games/<title ID>/save (dm/ios/Sources/main.m), the per-game folder it uses when the
+/// Where the saves are: the Mac app keeps them beside itself in <app's folder>/save/<title ID> when that folder also holds
+/// games/ (the launcher's layout), else in ~/Library/Application Support/nxnative/<title ID>/save (dm/mac/launcher.c, DM_SAVE;
+/// the device save is DM_SAVE + "_device", dm/host/hle_fs.c); the iPhone app in Documents/games/<title ID>/save (dm/ios/Sources/main.m), the per-game folder it uses when the
 /// game files come from Documents/games/<title ID>/, which is where the launcher's install puts them. A sideloaded IPA with
 /// the game files inside keeps Documents/save instead, but the launcher knows the bundle ID (the data container) only of the
 /// apps it installed, so those are the ones it copies to.
@@ -36,7 +37,8 @@ struct SaveTransfer {
     static let folders = ["save", "save_device"]
 
     let titleID: String
-    let mac: URL          // the game's Application Support folder on this Mac
+    let macSave: URL      // the Mac app's DM_SAVE
+    var legacySave: URL?  // the ~/Library save the Mac app copies into macSave on its next start, while macSave is empty
     let device: String    // the device's UDID
     let bundle: String    // the installed app's bundle ID: its data container
     let devicectl: DeviceControl
@@ -54,21 +56,48 @@ struct SaveTransfer {
         var newest: Date?
     }
 
-    static func macFolder(titleID: String,
-                          support: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]) -> URL {
-        support.appendingPathComponent("nxnative").appendingPathComponent(titleID)
+    static func legacyMacSave(titleID: String,
+                              support: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]) -> URL {
+        support.appendingPathComponent("nxnative").appendingPathComponent(titleID).appendingPathComponent("save")
+    }
+
+    /// The Mac app's DM_SAVE, by launcher.c's rule: beside the app when the app's folder also holds games/, else ~/Library.
+    static func macSave(titleID: String, appPath: String,
+                        support: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]) -> (save: URL, legacy: URL?) {
+        let legacy = legacyMacSave(titleID: titleID, support: support)
+        guard !appPath.isEmpty else { return (legacy, nil) }
+        let folder = URL(fileURLWithPath: appPath).deletingLastPathComponent()
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: folder.appendingPathComponent("games").path, isDirectory: &isDir), isDir.boolValue else { return (legacy, nil) }
+        return (folder.appendingPathComponent("save").appendingPathComponent(titleID), legacy)
+    }
+
+    /// A save folder on the Mac: `save` is DM_SAVE itself, `save_device` sits beside it as DM_SAVE + "_device".
+    static func macPath(_ folder: String, save: URL) -> URL {
+        folder == "save" ? save : URL(fileURLWithPath: save.path + "_device")
+    }
+
+    /// Where a save folder is read from: macSave, or while that is still empty the ~/Library save the app brings across.
+    func macSource(_ folder: String) -> URL? {
+        let current = Self.macPath(folder, save: macSave)
+        if Self.newest(in: current) != nil { return current }
+        if let legacySave, Self.newest(in: Self.macPath("save", save: macSave)) == nil, Self.newest(in: Self.macPath("save_device", save: macSave)) == nil {
+            let old = Self.macPath(folder, save: legacySave)
+            if Self.newest(in: old) != nil { return old }
+        }
+        return nil
     }
 
     var deviceFolder: String { "Documents/games/\(titleID)" }
     /// Backups go beside the save, one folder per copy: "<date> mac" holds the Mac save a copy from the device replaced,
     /// "<date> device" the device save a copy from the Mac replaced.
-    var backups: URL { mac.appendingPathComponent("save-backups") }
+    var backups: URL { macSave.deletingLastPathComponent().appendingPathComponent(macSave.lastPathComponent + "-backups") }
 
     // ---- reading ----
 
     func readMac() -> Contents {
         Self.folders.reduce(into: Contents()) { c, f in
-            guard let date = Self.newest(in: mac.appendingPathComponent(f)) else { return }
+            guard let source = macSource(f), let date = Self.newest(in: source) else { return }
             c.folders.append(f)
             c.newest = max(c.newest ?? date, date)
         }
@@ -104,19 +133,20 @@ struct SaveTransfer {
         let there = try readDevice()
         guard !there.folders.isEmpty else { throw Failure.noDeviceSave }
         let fm = FileManager.default
-        let incoming = mac.appendingPathComponent(".save-incoming-\(UUID().uuidString)")
+        let incoming = macSave.deletingLastPathComponent().appendingPathComponent(".save-incoming-\(UUID().uuidString)")
         try fm.createDirectory(at: incoming, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: incoming) }
         for f in there.folders {
             try copyFrom(deviceFolder + "/" + f, to: incoming.appendingPathComponent(f))
         }
         var backup: URL?
-        for f in there.folders where fm.fileExists(atPath: mac.appendingPathComponent(f).path) {
+        // A ~/Library save the app has not brought across yet stays where it is: macSave gets the copy, so the app keeps it
+        for f in there.folders where fm.fileExists(atPath: Self.macPath(f, save: macSave).path) {
             let into = try backup ?? makeBackup("mac")
             backup = into
-            try fm.moveItem(at: mac.appendingPathComponent(f), to: into.appendingPathComponent(f))
+            try fm.moveItem(at: Self.macPath(f, save: macSave), to: into.appendingPathComponent(f))
         }
-        for f in there.folders { try fm.moveItem(at: incoming.appendingPathComponent(f), to: mac.appendingPathComponent(f)) }
+        for f in there.folders { try fm.moveItem(at: incoming.appendingPathComponent(f), to: Self.macPath(f, save: macSave)) }
         return backup
     }
 
@@ -133,7 +163,7 @@ struct SaveTransfer {
             for f in there.folders { try copyFrom(deviceFolder + "/" + f, to: into.appendingPathComponent(f)) }
         }
         for f in here.folders {
-            let r = devicectl.run(Self.copyToCommand(device: device, bundle: bundle, source: mac.appendingPathComponent(f).path, destination: deviceFolder + "/" + f))
+            let r = devicectl.run(Self.copyToCommand(device: device, bundle: bundle, source: (macSource(f) ?? Self.macPath(f, save: macSave)).path, destination: deviceFolder + "/" + f))
             guard r.ok else { throw Failure.device(Self.lastLine(r.output)) }
         }
         return backup
@@ -290,9 +320,10 @@ struct SavesView: View {
 
     private var transfer: SaveTransfer? {
         guard let game else { return nil }
-        let mac = support.map { SaveTransfer.macFolder(titleID: game.titleID, support: $0) } ?? SaveTransfer.macFolder(titleID: game.titleID)
+        let mac = support.map { SaveTransfer.macSave(titleID: game.titleID, appPath: game.appPath, support: $0) }
+            ?? SaveTransfer.macSave(titleID: game.titleID, appPath: game.appPath)
         let bundle = NSDictionary(contentsOfFile: game.iosAppPath + "/Info.plist")?["CFBundleIdentifier"] as? String ?? ""
-        return SaveTransfer(titleID: game.titleID, mac: mac, device: game.installedDevice, bundle: bundle,
+        return SaveTransfer(titleID: game.titleID, macSave: mac.save, legacySave: mac.legacy, device: game.installedDevice, bundle: bundle,
                             devicectl: devicectl ?? .xcrun(m.xcrunPath))
     }
 
