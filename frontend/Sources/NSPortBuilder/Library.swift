@@ -17,6 +17,8 @@ struct LibraryGame: Codable, Identifiable, Equatable {
     var mods: [String] = []   // the mods (folder names in the game's mods folder) switched on
     var iosAppPath = ""
     var installedDevice = ""
+    /// The repository checkout's commit the last finished build used (ToolsAge); empty for a build from before it was recorded.
+    var toolsCommit = ""
 
     var isReady: Bool {
         guard let app = try? MacGameBundle.read(URL(fileURLWithPath: appPath)) else { return false }
@@ -49,6 +51,7 @@ extension LibraryGame {
         mods = try c.decodeIfPresent([String].self, forKey: .mods) ?? []
         iosAppPath = try c.decodeIfPresent(String.self, forKey: .iosAppPath) ?? ""
         installedDevice = try c.decodeIfPresent(String.self, forKey: .installedDevice) ?? ""
+        toolsCommit = try c.decodeIfPresent(String.self, forKey: .toolsCommit) ?? ""
     }
 }
 
@@ -367,23 +370,25 @@ final class GameLibrary: ObservableObject {
         return game.id
     }
 
-    func recordCompletedApp(path: String, for id: UUID) {
+    func recordCompletedApp(path: String, commit: String = "", for id: UUID) {
         guard var game = games.first(where: { $0.id == id }),
               let app = try? MacGameBundle.read(URL(fileURLWithPath: path)),
               app.titleID == game.titleID || game.titleID.hasPrefix("/") else { return }
         game.titleID = app.titleID
         game.appPath = path
         game.name = app.name
+        game.toolsCommit = commit   // empty for a checkout without git: nothing to compare, rather than an older build's commit
         upsert(game)
     }
 
-    func recordCompletedIOS(ipa: String, archive: String, app: String = "", device: String = "", for id: UUID) {
+    func recordCompletedIOS(ipa: String, archive: String, app: String = "", device: String = "", commit: String = "", for id: UUID) {
         guard var game = games.first(where: { $0.id == id }),
               FileManager.default.fileExists(atPath: ipa) || FileManager.default.fileExists(atPath: app + "/Info.plist") else { return }
         // What this build made; an earlier build's IPA or installed app stays when this one made none
         if !ipa.isEmpty { game.ipaPath = ipa }
         if !archive.isEmpty { game.archivePath = archive }
         if !app.isEmpty { game.iosAppPath = app; game.installedDevice = device }
+        game.toolsCommit = commit
         upsert(game)
     }
 
