@@ -404,6 +404,7 @@ enum L10n {
         "msg.exitCode": ("退出码 %d", "exit code %d"),
         "msg.stagingFailed": ("无法在暂存文件夹里建立链接（文件在不同磁盘？）",
                               "Could not create links in the staging folder (files on different volumes?)"),
+        "msg.stagedFromSharedFolder": ("文件夹里还有其他游戏：只把选中的这个游戏（%@）临时复制出去构建", "The folder holds other games: building from a temporary copy of this one (%@)"),
         "msg.launchFailed": ("无法启动构建脚本：%@", "Could not start the build script: %@"),
         "msg.repoInvalid": ("仓库路径无效：%@——用上方的「选择仓库…」指向本项目的 clone",
                             "Invalid repository path: %@ — use Choose repository… above to point at your clone"),

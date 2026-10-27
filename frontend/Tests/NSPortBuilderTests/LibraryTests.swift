@@ -762,7 +762,6 @@ final class LibraryTests: XCTestCase {
         try capture("building", activeID: library.games[1].id)
         model.running = false
     }
-}
 
     /// Issue #52: the failure note names the last real line, not just the exit code.
     func testLastMeaningfulLineSkipsProgressEventsAndBlankLines() {
@@ -777,3 +776,26 @@ final class LibraryTests: XCTestCase {
         XCTAssertNil(BuildModel.lastMeaningfulLine("\n\n"))
         XCTAssertNil(BuildModel.lastMeaningfulLine("{\"event\":\"stage_end\"}\n"))
     }
+
+    /// Issue #58: a folder holding several games is staged down to the picked one, and its update
+    /// and add-on content come along — classified exactly as build_ipa_from_nsp.py:445 does.
+    func testSiblingsOfThePickedGameAreClassifiedAsTheScriptDoes() {
+        let base = UInt64(0x010015100B514000)
+        let app = base & ~UInt64(0xFFF)
+        func owner(_ tid: UInt64) -> UInt64 {
+            let low = tid & 0xFFF
+            return low == 0 ? tid : (low == 0x800 ? tid & ~UInt64(0xFFF) : (tid & ~UInt64(0xFFF)) - 0x1000)
+        }
+        XCTAssertEqual(owner(base), app, "the base game")
+        XCTAssertEqual(owner(base + 0x800), app, "its update")
+        XCTAssertEqual(owner(base + 0x1001), app, "add-on content 1")
+        XCTAssertNotEqual(owner(UInt64(0x01007EF00011E000)), app, "another game")
+        XCTAssertNotEqual(owner(UInt64(0x01007EF00011E800)), app, "another game's update")
+    }
+
+    func testTitleIDReadsTheBracketedFormTheFilesUse() {
+        XCTAssertEqual(BuildModel.titleID("Mario Wonder [010015100B514000][v0].nsp"), 0x010015100B514000)
+        XCTAssertEqual(BuildModel.titleID("/ROMs/TotK [01007EF00011E000].xci"), 0x01007EF00011E000)
+        XCTAssertNil(BuildModel.titleID("no title id here.nsp"))
+    }
+}

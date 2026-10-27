@@ -666,21 +666,48 @@ final class BuildModel: ObservableObject {
         }
         let py = pythonPath.isEmpty ? "/usr/bin/python3" : pythonPath
 
-        // One folder when everything lives together; otherwise a staging folder of symlinks.
+        // One folder when everything lives together; otherwise a staging folder of symlinks. A folder
+        // that holds other games too (a ROMs folder with one file per game) is staged as well: the
+        // script takes one game per folder and refuses one with several ("more than one game in the
+        // folder"), even when only the base game was picked (issue #58; ufooer's PR #31).
         let baseDir = (basePath as NSString).deletingLastPathComponent
         let allPaths = [basePath, updatePath] + dlcPaths
         let dirs = Set(allPaths.filter { !$0.isEmpty }.map { ($0 as NSString).deletingLastPathComponent })
+        let picked = Set(allPaths.filter { !$0.isEmpty }.map { ($0 as NSString).lastPathComponent })
+        let unpicked = ((try? FileManager.default.contentsOfDirectory(atPath: baseDir)) ?? []).filter {
+            ["nsp", "xci", "nsz", "xcz"].contains(($0 as NSString).pathExtension.lowercased()) && !picked.contains($0)
+        }
+        // Staged, the folder's own update and add-on content would be left behind, where the script
+        // used to find them unpicked: bring along those whose file name carries this game's title ID
+        // exactly as build_ipa_from_nsp.py:445 reads it: the low 12 bits are 0x000 for a base game,
+        // 0x800 for its update, and anything else is add-on content below the base.
+        var staged = allPaths
+        if let base = Self.titleID((basePath as NSString).lastPathComponent) {
+            let app = base & ~0xFFF
+            for f in unpicked {
+                guard let tid = Self.titleID(f) else { continue }
+                let low = tid & 0xFFF
+                let owner = low == 0 ? tid : (low == 0x800 ? tid & ~0xFFF : (tid & ~0xFFF) - 0x1000)
+                guard owner == app else { continue }
+                if low == 0x800 && !updatePath.isEmpty { continue }   // the update was picked already
+                if low != 0 && low != 0x800 && tid <= app { continue }   // add-on content sits above its base
+                staged.append(baseDir + "/" + f)
+            }
+        }
         var inputDir = baseDir
-        if dirs.count > 1 {
+        if dirs.count > 1 || !unpicked.isEmpty {
             let tmp = NSTemporaryDirectory() + "nsport-\(UUID().uuidString.prefix(8))"
             try? FileManager.default.createDirectory(atPath: tmp, withIntermediateDirectories: true)
             var linked = 0
-            for f in allPaths where !f.isEmpty {
+            for f in staged where !f.isEmpty {
                 let dst = tmp + "/" + (f as NSString).lastPathComponent
                 if (try? FileManager.default.createSymbolicLink(atPath: dst, withDestinationPath: f)) != nil { linked += 1 }
             }
             if linked == 0 { fail(t("msg.stagingFailed")); return }
             staging = tmp; inputDir = tmp
+            if !unpicked.isEmpty {
+                say(String(format: t("msg.stagedFromSharedFolder"), (basePath as NSString).lastPathComponent))
+            }
         } else { staging = nil }
 
         let tidHex = Self.titleID(basePath).map { String(format: "%016llX", $0) } ?? "game"
