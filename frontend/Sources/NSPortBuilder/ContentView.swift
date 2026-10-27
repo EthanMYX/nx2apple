@@ -715,8 +715,13 @@ final class BuildModel: ObservableObject {
         // not assumed to be ~/.dotnet (Homebrew keeps it in …/opt/dotnet/libexec). Only set when the
         // derivation actually answered — a wrong root is worse than none, and the pipeline derives
         // and verifies its own (DOTNET_ROOT, build_ipa_from_nsp.py) when this is absent.
+        // TMPDIR as well: .NET 10 on macOS keeps the named mutex its first-run configure takes
+        // (NuGet-Migrations) under $TMPDIR/.dotnet/shm, and with no TMPDIR it stats "" and dies with
+        // 'NuGet-Migrations' + lstat("") == ENOENT before any project is read. NSTemporaryDirectory()
+        // is the per-user temp folder whether or not the app's own environment carries one.
         var denv: [String: String] = ["PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-                                      "USER": NSUserName(), "HOME": NSHomeDirectory(), "LANG": "en_US.UTF-8"]
+                                      "USER": NSUserName(), "HOME": NSHomeDirectory(), "LANG": "en_US.UTF-8",
+                                      "TMPDIR": NSTemporaryDirectory()]
         if let droot = Self.dotnetRoot(for: dotnetPath.isEmpty ? "dotnet" : dotnetPath) {
             denv["DOTNET_ROOT"] = droot   // both variables carry the same root, as the apphost checks the arch-specific one first
             denv["DOTNET_ROOT_ARM64"] = droot
@@ -1281,7 +1286,7 @@ final class BuildModel: ObservableObject {
         p.arguments = ["--list-runtimes"]
         let pipe = Pipe()
         p.standardOutput = pipe; p.standardError = Pipe(); p.standardInput = FileHandle.nullDevice
-        p.environment = ["HOME": NSHomeDirectory(), "PATH": "/usr/bin:/bin"]
+        p.environment = ["HOME": NSHomeDirectory(), "PATH": "/usr/bin:/bin", "TMPDIR": NSTemporaryDirectory()]
         guard (try? p.run()) != nil else { return nil }
         p.waitUntilExit()
         guard p.terminationStatus == 0 else { return nil }
@@ -1300,7 +1305,8 @@ final class BuildModel: ObservableObject {
         if let d = firstExisting(cands) {
             // the extractor targets net10.0, so an SDK (not just a runtime) is needed
             let ok = runOK(d, ["--list-sdks"], env: ["DOTNET_ROOT": (d as NSString).deletingLastPathComponent,
-                                                      "PATH": "/usr/bin:/bin", "HOME": NSHomeDirectory()])
+                                                      "PATH": "/usr/bin:/bin", "HOME": NSHomeDirectory(),
+                                                      "TMPDIR": NSTemporaryDirectory()])
             return (d, ok)
         }
         return ("dotnet", false)
