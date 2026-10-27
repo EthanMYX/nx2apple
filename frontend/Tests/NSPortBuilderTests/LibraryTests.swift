@@ -650,9 +650,10 @@ final class LibraryTests: XCTestCase {
         model.slots[0].paths = []
         library.selectedID = library.games.first?.id
         func capture(_ name: String, width: CGFloat = 1440, height: CGFloat = 1024, page: LauncherPage = .library, activeID: UUID? = nil, empty: Bool = false,
-                     search: String? = nil) throws {
+                     search: String? = nil, older: Set<UUID> = []) throws {
             let store = empty ? GameLibrary(file: temporary.appendingPathComponent("empty.json")) : library
-            let view = ContentView(model: model, library: store, initialPage: page, activeBuildID: activeID, performStartupChecks: false, search: search)
+            let view = ContentView(model: model, library: store, initialPage: page, activeBuildID: activeID, performStartupChecks: false, search: search,
+                                   olderTools: older)
             let host = NSHostingView(rootView: view)
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
                                   styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
@@ -687,6 +688,12 @@ final class LibraryTests: XCTestCase {
             try capture("settings-update-ready", page: .settings)
             try capture("library-update-ready")
         }
+        // Games built with older build tools (ToolsAge): the selected one rebuilt from its own inputs, as a recorded build has them
+        model.slots[0].paths = ["/preview/Hades [\(titleID)].nsp"]
+        _ = library.rememberInputs(model)
+        model.slots[0].paths = []
+        try capture("library-older-tools", older: [library.games[0].id, library.games[1].id])
+        try capture("library-older-tools-small", width: 900, height: 680, older: [library.games[0].id, library.games[1].id])
         // An iPhone build with a paired device and a team (example values)
         let previousTarget = model.target
         model.target = "ios"
@@ -698,6 +705,23 @@ final class LibraryTests: XCTestCase {
         model.installDevice = "00008150-AAAA"; model.signingTeam = "TEAM123456"
         try capture("build-install", height: 1300, page: .builds)
         model.installDevice = previousDevice; model.signingTeam = previousTeam; model.target = previousTarget
+        // The Free space sheet with a measured build folder (example sizes), two parts picked, then while a build runs
+        let measured = BuildFolderSurvey(folder: "/Volumes/Games/Hades/\(titleID)_build",
+                                         sizes: [.extracted: 9_800_000_000, .shaders: 1_450_000_000, .xcode: 2_100_000_000, .caches: 610_000_000], kept: 48_000_000)
+        for (name, running) in [("free-space", false), ("free-space-running", true)] {
+            model.running = running
+            let sheet = NSHostingView(rootView: FreeSpaceView(m: model, game: library.games[0], survey: measured, chosen: [.extracted, .xcode])
+                .environmentObject(PadFocus()))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 690), styleMask: [.titled], backing: .buffered, defer: false)
+            window.contentView = sheet
+            window.orderFront(nil)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+            let rep = try XCTUnwrap(sheet.bitmapImageRepForCachingDisplay(in: sheet.bounds))
+            sheet.cacheDisplay(in: sheet.bounds, to: rep)
+            try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent(name + ".png"))
+            window.orderOut(nil)
+        }
+        model.running = false
         if let json = ProcessInfo.processInfo.environment["NX_LAUNCHER_CAPTURE_SETTINGS"] {   // a launcher.json from dm/games/settings.py
             let first = library.games[0]
             let dm = URL(fileURLWithPath: first.appPath).appendingPathComponent("Contents/Resources/dm")

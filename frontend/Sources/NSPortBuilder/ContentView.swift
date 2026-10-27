@@ -501,6 +501,9 @@ final class BuildModel: ObservableObject {
     }
     /// The release that is downloaded, verified and unpacked: it goes in when the app quits, or with Restart now.
     @Published var appStaged: AppUpdate.Staged?
+    /// Where a rename-era install put the new app (the old bundle name is gone): Settings shows it,
+    /// because the Dock entry pointing at the old path is stale until the player re-pins it.
+    static var noteRenamedInstall: String?
     /// Whether this copy may replace itself; a launcher built from the repository never does (tests set it).
     var appInstallability = AppUpdate.installability(Bundle.main.bundleURL, appVersion: BuildModel.appVersion)
     private var quitObserver: NSObjectProtocol?
@@ -677,8 +680,9 @@ final class BuildModel: ObservableObject {
     @discardableResult
     func installStagedUpdate(relaunch: Bool, at current: URL = Bundle.main.bundleURL) -> Bool {
         guard let staged = appStaged, appInstallability == .ok else { return false }
+        let placed: URL
         do {
-            try AppUpdate.install(staged.app, over: current, buildRunning: !mayInstallAppUpdate)
+            placed = try AppUpdate.install(staged.app, over: current, buildRunning: !mayInstallAppUpdate)
         } catch AppUpdate.InstallError.failed(let why) {
             appStatus = String(format: t("app.installFail"), why)
             return false
@@ -687,9 +691,17 @@ final class BuildModel: ObservableObject {
             return false
         }
         appStaged = nil
+        // A rename era (nxnative → NS Port Builder → NX2Apple) installs under the release's own
+        // bundle name; the Dock entry pointing at the old path goes stale once, so the log says
+        // where the new copy landed instead of leaving the player to find it.
+        if placed != current {
+            fputs("launcher: the update was installed as \(placed.lastPathComponent) (the app was renamed); "
+                + "the previous \(current.lastPathComponent) was removed — re-pin it in the Dock\n", stderr)
+            Self.noteRenamedInstall = placed.path
+        }
         if relaunch {
             appStatus = String(format: t("app.relaunching"), staged.release.tag)
-            NSWorkspace.shared.openApplication(at: current, configuration: NSWorkspace.OpenConfiguration())
+            NSWorkspace.shared.openApplication(at: placed, configuration: NSWorkspace.OpenConfiguration())
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { exit(0) }
         }
         return true
@@ -744,9 +756,29 @@ final class BuildModel: ObservableObject {
     /// pruning the build folders this pipeline itself writes so a rescan is not slow.
     func scan(folder: String) {
         gameDir = folder
-        let fm = FileManager.default
-        var base: [(String, Int)] = [], update: [(String, Int, Int)] = [], dlc: [String] = []
+        let found = Self.classify(Self.inputFiles(in: folder))
+        updateSlot("base") { $0.paths = found.base.map { [$0] } ?? []; $0.problem = found.base == nil ? "data.noBase" : "" }
+        updateSlot("update") { $0.paths = found.update.map { [$0] } ?? []; $0.problem = "" }
+        updateSlot("dlc") { $0.paths = found.dlc; $0.problem = "" }
+        updateSlot("keys") { $0.paths = found.keys.map { [$0] } ?? []; $0.problem = "" }
+        if !found.anyGame {
+            updateSlot("base") { $0.problem = "data.noNsp" }
+        }
+    }
+
+    /// What a set of files holds for the four slots (`classify`).
+    struct FoundInputs: Equatable {
+        var base: String?
+        var update: String?
+        var dlc: [String] = []
         var keys: String?
+        var anyGame: Bool { base != nil || update != nil || !dlc.isEmpty }
+    }
+
+    /// The files under a folder, pruning the build folders this pipeline itself writes so a rescan is not slow.
+    nonisolated static func inputFiles(in folder: String) -> [String] {
+        let fm = FileManager.default
+        var files: [String] = []
         var seen = 0
         let enumerator = fm.enumerator(atPath: folder)
         while let rel = enumerator?.nextObject() as? String {
@@ -763,32 +795,36 @@ final class BuildModel: ObservableObject {
                 if low == "archive" || low == "xcode" || low.hasSuffix("_build") || low.hasSuffix("_survey") { enumerator?.skipDescendants() }
                 continue
             }
-            if keys == nil && (low == "prod.keys" || low.hasSuffix(".keys")) { keys = path; continue }
-            guard low.hasSuffix(".nsp") || low.hasSuffix(".xci") else { continue }
-            let size = (try? fm.attributesOfItem(atPath: path))?[.size] as? Int ?? 0
+            files.append(path)
+        }
+        return files
+    }
+
+    /// NSP/XCI (and their compressed NSZ/XCZ) sorted by the title ID in the file name, plus the first prod.keys.
+    /// Shared by Choose game folder and files dropped on the Builds page.
+    nonisolated static func classify(_ files: [String]) -> FoundInputs {
+        var base: [(String, Int)] = [], update: [(String, Int, Int)] = [], dlc: [String] = []
+        var found = FoundInputs()
+        for path in files {
+            let name = (path as NSString).lastPathComponent
+            let low = name.lowercased()
+            if found.keys == nil && (low == "prod.keys" || low.hasSuffix(".keys")) { found.keys = path; continue }
+            guard ["nsp", "xci", "nsz", "xcz"].contains((low as NSString).pathExtension) else { continue }
+            let size = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int ?? 0
             guard size > 0 else { continue }   // an incomplete download leaves 0-byte files behind
-            guard let tid = Self.titleID(name) else { continue }   // a name without [title ID] cannot be classified
+            guard let tid = titleID(name) else { continue }   // a name without [title ID] cannot be classified
             switch tid & 0xFFF {
             case 0: base.append((path, size))
-            case 0x800: update.append((path, size, Self.updateVersion(name)))
+            case 0x800: update.append((path, size, updateVersion(name)))
             default: dlc.append(path)
             }
         }
         // several bases happen when a folder holds a repack beside the original: the largest wins
-        updateSlot("base") {
-            $0.paths = base.sorted { $0.1 > $1.1 }.prefix(1).map(\.0)
-            $0.problem = base.isEmpty ? "data.noBase" : ""
-        }
+        found.base = base.sorted { $0.1 > $1.1 }.first?.0
         // several updates: the newest [vN] is the one a profile would pack
-        updateSlot("update") {
-            $0.paths = update.sorted { $0.2 > $1.2 }.prefix(1).map(\.0)
-            $0.problem = ""
-        }
-        updateSlot("dlc") { $0.paths = dlc.sorted(); $0.problem = "" }
-        updateSlot("keys") { $0.paths = keys.map { [$0] } ?? []; $0.problem = "" }
-        if base.isEmpty && update.isEmpty && dlc.isEmpty {
-            updateSlot("base") { $0.problem = "data.noNsp" }
-        }
+        found.update = update.sorted { $0.2 > $1.2 }.first?.0
+        found.dlc = dlc.sorted()
+        return found
     }
 
     /// The [vN] in a file name, 0 when absent — used to pick the newest of several updates.
@@ -2005,8 +2041,10 @@ struct BuilderView: View {
     var onChooseLibraryFolder: () -> Void = {}
     var onOpenControls: () -> Void = {}
     var controlChanges = 0
+    @AppStorage(BuildNotice.defaultsKey) private var notifyBuilds = true   // BuildNotifications.swift
     @State private var extrasOpen = false
     @State private var logOpen = false
+    @State private var keyCheck: KeyCheck.Outcome?   // prod.keys against the chosen files (KeyCheck.swift)
     @EnvironmentObject private var padFocus: PadFocus
 
     var body: some View {
@@ -2022,6 +2060,7 @@ struct BuilderView: View {
         .onChange(of: padFocus.focused) { id in   // a controller's focus on this page scrolls into view
             if let id, id.hasPrefix("set.") { withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .center) } }
         }
+        .modifier(GameFilesDrop(enabled: !settings && !m.running, label: m.t("drop.hint")) { m.take(dropped: $0) })   // DropFiles.swift
         }
         .buttonStyle(LauncherSecondaryButtonStyle())
     }
@@ -2157,7 +2196,10 @@ struct BuilderView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            ForEach(m.slots.filter { !$0.optional }, id: \.id) { s in divider; slotRow(s) }
+            ForEach(m.slots.filter { !$0.optional }, id: \.id) { s in
+                divider; slotRow(s)
+                if s.id == "keys", let keyCheck { KeyCheckLine(outcome: keyCheck, t: m.t) }
+            }
             divider
             disclosure(m.t("build.options"), isOpen: extrasOpen) { extrasOpen.toggle() }
             if extrasOpen {
@@ -2170,6 +2212,9 @@ struct BuilderView: View {
                     if d.runModal() == .OK, let u = d.url { m.outDir = u.path }
                 }
             }
+        }
+        .task(id: KeyCheck.Inputs(keys: m.keysPath, files: [m.basePath, m.updatePath] + m.dlcPaths)) {
+            keyCheck = await KeyCheck.runDetached(KeyCheck.Inputs(keys: m.keysPath, files: [m.basePath, m.updatePath] + m.dlcPaths))
         }
     }
 
@@ -2332,6 +2377,9 @@ struct BuilderView: View {
             disclosure(m.t("build.log"), isOpen: logOpen) { logOpen.toggle() }
             if logOpen { logView.padding(.horizontal, 14).padding(.bottom, 14) }
         }
+        .onReceive(BuildNotifier.shared.$showLog) { show in   // a clicked notification of a failed build
+            if show { logOpen = true; DispatchQueue.main.async { BuildNotifier.shared.showLog = false } }
+        }
     }
 
     private var logView: some View {
@@ -2437,6 +2485,12 @@ struct BuilderView: View {
                 }
                 .frame(width: Self.settingsButtonWidth)
                 .padTarget("set.language", scope: "main", activate: { cycleLanguage(1) }, adjust: { cycleLanguage($0) })
+            }
+            divider
+            // Build notifications (BuildNotifications.swift): none without an app bundle, e.g. under swift run
+            row(m.t("settings.notify"), detail: m.t(BuildNotice.hasBundleID ? "settings.notifyNote" : "settings.notifyUnbundled")) {
+                Toggle("", isOn: $notifyBuilds).toggleStyle(LauncherSwitchStyle()).labelsHidden().disabled(!BuildNotice.hasBundleID)
+                    .padTarget("set.notify", scope: "main") { notifyBuilds.toggle() }
             }
             divider
             row("NX2Apple", detail: String(format: m.t("app.version"), BuildModel.appVersion),

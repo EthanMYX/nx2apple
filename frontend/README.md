@@ -16,9 +16,18 @@ writes them as PNG (from a copy of your library, with example paths), and
 ## Build game
 
 1. Select **Build game** and choose the folder containing one game's files, or
-   pick the base game and `prod.keys` separately.
+   pick the base game and `prod.keys` separately. Dropping NSP, NSZ or XCI files,
+   a folder or `prod.keys` onto the page does the same: they are sorted into base
+   game, update and DLC by the title ID in their names, as a chosen folder is.
 2. Add an update or DLC under **Updates & add-on content** when needed.
 3. Choose **This Mac** or **iPhone / iPad**, then **Build game**.
+
+As soon as the base game and `prod.keys` are chosen, the line under `prod.keys` says
+whether the keys open the game files: it decrypts the NCA headers of the NSP or NSZ
+(base game, update, DLC) with `header_key` and checks that the keys of each one's key
+generation are in the file, so keys that are too old for an update show up before the
+build, not in its extraction step. An XCI cannot be checked this way and says so. No
+key value is shown or logged.
 
 Setup lives under **Settings**: the games folder, the repository and its updates,
 the dependency checks and installers, and app updates. Missing setup is linked
@@ -31,6 +40,13 @@ the app.
 A completed Mac build appears in the collection automatically and can be started
 with **Play**. An iPhone build, by default, offers its unsigned IPA and the
 sideloading and RomFS-copy instructions.
+
+When a build finishes or fails while the app is in the background, a notification
+names the game and the target; clicking it shows the game in the library, or the
+Builds page with the log for a failed build. macOS asks for permission when the
+first build starts, and **Settings → App** turns it off. Notifications need the
+app bundle: started with `swift run` the launcher has no bundle identifier, and
+there are none.
 
 ## Install on an iPhone or iPad
 
