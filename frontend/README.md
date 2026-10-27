@@ -65,10 +65,11 @@ For a key, click its field and press the new key (Esc keeps the old one, × leav
 function on no key). One key holds one function, so the function that had the key before
 is left on none, as in the host. For a controller button, choose the button it sends
 (A and B swapped, for example). The right stick has no keys by default and can get some
-here. **Play** passes only the changes, as `DM_KEYMAP` and `DM_PAD_MAP`
-(`dm/host/input_map.h`; the engine change is
-[seedds/nxnative#386](https://github.com/seedds/nxnative/pull/386), so a sync from
-upstream brings it). A build without it ignores them and uses the default keys.
+here. **Play** passes only the changes, as `DM_KEYMAP` and `DM_PAD_MAP`, which the host
+reads through `dm/host/input_map.h` — upstream's
+[seedds/nxnative#386](https://github.com/seedds/nxnative/pull/386), carried in this fork
+while it is open, and listed in `docs/env_switches.tsv`. A host built before the carrier
+has no `input_map.h` and ignores both, so its games play with the default keys.
 
 ## Artwork
 
