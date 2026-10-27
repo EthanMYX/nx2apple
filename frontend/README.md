@@ -20,6 +20,13 @@ writes them as PNG (from a copy of your library, with example paths), and
 2. Add an update or DLC under **Updates & add-on content** when needed.
 3. Choose **This Mac** or **iPhone / iPad**, then **Build game**.
 
+As soon as the base game and `prod.keys` are chosen, the line under `prod.keys` says
+whether the keys open the game files: it decrypts the NCA headers of the NSP or NSZ
+(base game, update, DLC) with `header_key` and checks that the keys of each one's key
+generation are in the file, so keys that are too old for an update show up before the
+build, not in its extraction step. An XCI cannot be checked this way and says so. No
+key value is shown or logged.
+
 Setup lives under **Settings**: the games folder, the repository and its updates,
 the dependency checks and installers, and app updates. Missing setup is linked
 from the build screen. The progress shows each of the script's steps with its
