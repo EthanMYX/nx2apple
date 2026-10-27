@@ -744,6 +744,15 @@ final class LibraryTests: XCTestCase {
         let previousDevice = model.installDevice, previousTeam = model.signingTeam
         model.installDevice = "00008150-AAAA"; model.signingTeam = "TEAM123456"
         try capture("build-install", height: 1300, page: .builds)
+        // #87: signed in to Xcode, no certificate yet (a free personal team and a paid one), and neither account nor certificate
+        model.teams = [SigningTeam(id: "FGHIJ67890", identity: "", name: "Jo Doe", personal: true),
+                       SigningTeam(id: "KLMNO11111", identity: "", name: "Studio Ltd")]
+        model.signingTeam = "FGHIJ67890"
+        try capture("build-install-xcode-team", height: 1300, page: .builds)
+        model.teams = []; model.signingTeam = ""
+        try capture("build-install-no-team", height: 1300, page: .builds)
+        model.teams = [SigningTeam(id: "TEAM123456", identity: "Apple Development: Jo Doe (ABCDE12345)")]
+        model.signingTeam = "TEAM123456"
         model.installDevice = previousDevice; model.signingTeam = previousTeam; model.target = previousTarget
         // The Free space sheet with a measured build folder (example sizes), two parts picked, then while a build runs
         let measured = BuildFolderSurvey(folder: "/Volumes/Games/Hades/\(titleID)_build",
