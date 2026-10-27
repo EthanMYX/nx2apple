@@ -20,8 +20,21 @@ from capstone.arm64 import ARM64_OP_IMM, ARM64_OP_MEM, ARM64_OP_REG
 import nso_asm
 from nso_asm import *   # the instruction encoders (B, ADRP, LDRX, ...), shared with the per-build patch files
 
+def code_start(d):
+    """Where the code in the text segment starts: 0x80 in an NRO, 0 in an NSO. An NRO's text segment begins at file and memory
+    offset 0 with the file's own header in it (the start word, the MOD0 offset, NRO0 at +0x10, the segment table at +0x20, the
+    build ID at +0x40), so scanning it from 0 read the header as instructions: the build ID decoded as "ldr x18, #…" and stopped
+    Final Fantasy X/X-2 HD Remaster's rewrite (GitHub issue LNPANDY/NX2Apple#14). An NSO's text holds code from 0."""
+    return 0x80 if d[0x10:0x14] == b'NRO0' else 0
+
+def code_ranges(data_blocks, text_end, start=0):
+    """The text's code ranges: the gaps between its data blocks (nso_code.data_blocks), none of them before `start` (code_start)"""
+    gaps = zip([0] + [e for _, e in data_blocks], [s for s, _ in data_blocks] + [text_end])
+    return [(max(s, start), e) for s, e in gaps if e > max(s, start)]
+
 src, outdir, NAME = sys.argv[1], sys.argv[2], sys.argv[3]
 d = open(src, 'rb').read()
+CODE_START = code_start(d)
 if d[0x10:0x14] == b'NRO0':
     # An NRO (a module the game loads at run time with nn::ro, Super Smash Bros. Ultimate's fighter code): the file is the image itself, each segment stored at its memory offset
     # and uncompressed; +0x20 text, +0x28 ro, +0x30 data as {offset, size}, +0x38 bss size, +0x40 the build ID. Rewritten as an NSO of the same layout would be
@@ -463,21 +476,14 @@ for _ in range(nfde):
     a, s = rd(o, tenc); o += s
     _, s = rd(o, tenc); o += s
     starts.add(a)
-starts = sorted(x for x in starts if x < TEXT_LO + TEXT_END)
+starts = sorted(x for x in starts if CODE_START <= x < TEXT_END)
 
 # ---- Linear scan to find all rewrite points (not relying on register read/write reports) ----
 # Data blocks in the text (nso_code.py: Absolum's main starts with 1.7 MB of them) are not code: words there that read as rewrite sites are left alone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import nso_code
-DATA_BLOCKS = nso_code.data_blocks(IMG, TEXT_LO + TEXT_END, md, lo=TEXT_LO)
-# The text segment starts at its memory offset: 0 for an NSO (the image is rebuilt from 0) and
-# 0x80 for an NRO (the file is the image preceded by its header, so text sits at 0x80). Scanning
-# an NRO from 0 read the header's build ID as instructions and reported
-# "44 ldr x18, #0xfffffffffff40370" on Final Fantasy X/X-2 HD Remaster (GitHub issue #14).
-# TEXT_LO is where the code really begins in IMG; data_blocks() gets the same lower bound so its
-# returned offsets are already IMG-absolute and CODE_RANGES needs no further shift.
-TEXT_LO = segs[0][1]
-CODE_RANGES = list(zip([TEXT_LO] + [e for _, e in DATA_BLOCKS], [s for s, _ in DATA_BLOCKS] + [TEXT_LO + TEXT_END]))
+DATA_BLOCKS = nso_code.data_blocks(IMG, TEXT_END, md)
+CODE_RANGES = code_ranges(DATA_BLOCKS, TEXT_END, CODE_START)
 md_lite = Cs(CS_ARCH_ARM64, CS_MODE_ARM)   # no details: the x18 scan reads only the operand text
 R18 = re.compile(r'\b[xw]18\b')
 def x18_words(lo, hi):
@@ -976,7 +982,7 @@ def scratch_dead(off):
     mov x0, x19 before one) or a ret (none of them carries a result under AAPCS64; Pikmin 4's gate sits on the ldp x29, x30 of an epilogue). Only straight-line code is followed: a branch
     or a blr before the bl or ret answers no"""
     written = set()
-    for a in range(off, min(off + 4 * 16, TEXT_LO + TEXT_END), 4):
+    for a in range(off, min(off + 4 * 16, TEXT_END), 4):
         ins = dis(struct.unpack_from('<I', IMG, a)[0], a)
         if ins.mnemonic in ('bl', 'ret'): return True
         if ins.mnemonic in ('b', 'br', 'blr', 'cbz', 'cbnz', 'tbz', 'tbnz') or ins.mnemonic.startswith('b.'): return False
@@ -993,7 +999,7 @@ for off, oid, ow, why in obs:
     # and right after a call returns the callee was free to clobber them anyway (x16 / x17 are the veneer registers). Elsewhere, where the code ahead reads none of them before its next bl
     after_bl = off >= 4 and struct.unpack_from('<I', IMG, off - 4)[0] >> 26 == 0x25
     assert off in set(starts) or after_bl or scratch_dead(off), f'observation gate neither at a function entry, after a bl nor before a call with x9–x17 unread {off:#x}'
-    assert off < TEXT_LO + TEXT_END and off not in kinds and not any(lo <= off < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]), f'observation gate conflicts with a rewrite site {off:#x}'
+    assert off < TEXT_END and off not in kinds and not any(lo <= off < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]), f'observation gate conflicts with a rewrite site {off:#x}'
     put_branch(off, site_obs(off, oid, w)); stat('obs')
 
 # ---- Frame step in whole vsyncs (the mains whose patch file has FRAME_STEP: The Legend of Zelda: Tears of the Kingdom 1.4.3, Breath of the Wild 1.9.0, Hyrule Warriors: Age of Calamity 1.3.0,
