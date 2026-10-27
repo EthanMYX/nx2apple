@@ -747,6 +747,7 @@ MARKERS = {
     'dm/ios/Sources/main.m': 'romfs.idx',
     'dm/gfx/nvn/nvn_mtl.m': 'if (on_sub_thread()) rec_publish();',
     'dm/games/0100A00019DE0000/game.tsv': 'build	v1	1.0.137848',
+    'dm/host/dm.h': 'hle_profile.h',
 }
 PATCHERS = {
     'dm/host/hle_fs.c': patch_hle_fs,
