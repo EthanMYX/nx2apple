@@ -656,6 +656,7 @@ final class LibraryTests: XCTestCase {
         try capture("library")
         try capture("library-search", search: "zel")
         try capture("library-small", width: 900, height: 680)
+        try capture("library-fullscreen", width: 2000, height: 1125)   // the cards at their widest: the row must fit under the hero
         try capture("empty", empty: true)
         try capture("build", page: .builds)
         try capture("build-small", width: 900, height: 680, page: .builds)
