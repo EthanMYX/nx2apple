@@ -235,6 +235,8 @@ cd frontend && swift run          # 或直接双击 frontend/nxnative.app
 
 带完整 `Documents/log.txt` 的 issue 会优先看——那份日志通常能直接指出缺的是什么。
 
+开 issue 请用[问题表单](https://github.com/LNPANDY/NX2Apple/issues/new/choose)（游戏问题、构建问题、启动器）；需要附什么见 [CONTRIBUTING.md](CONTRIBUTING.md)（英文）。
+
 ## 跟随上游更新
 
 一个定时的 GitHub Actions 工作流（`.github/workflows/sync-upstream.yml`，每天 21:30 UTC，也可手动
