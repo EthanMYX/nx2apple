@@ -1,45 +1,77 @@
-# Release notes: both languages, every time
+# Release notes: English first, then Chinese
 
-Every release body is written in **Chinese first, then English**, in the same file, with the same
-structure. This exists because the fork's users are mostly Chinese while the upstream project and
-most contributors are not, and a release written in one language loses half of them.
+Every release body is written in **English first, then Chinese**, as two complete halves with a
+`---` between them. This exists because the fork's users are mostly Chinese while the upstream
+project and most contributors are not, and a release written in one language loses half of them.
+
+**Do not interleave the languages.** Earlier releases alternated one Chinese line and one English
+line, and the result was hard to read in both: a Chinese reader's eye had to skip every other line,
+and the two halves could not be compared. Each language is written as a complete document, in the
+same section order, and a reader picks one and reads straight through.
 
 ## The shape
 
 ```
-## 这一版做了什么 / What this release does
+## What this release does
+<one paragraph>
 
-**中文** — one paragraph: what changed for someone who already uses the app.
+## New            (optional: only when there is new functionality)
+- …
 
-**English** — the same paragraph, not a summary of it.
+## Fixes
+- …
 
-## 修复 / Fixes
+## Known issues
+- …
 
-- 中文条目。
-- English entry.
-- （同一件事两种语言写在相邻的两行，不分组、不重复编号）
+## Install
+- …
 
-## 已知问题 / Known issues
+## Credits
+- …
 
-- （同上）
+---
 
-## 安装 / Install
+## 这一版做了什么
+<一段>
 
-- **macOS**: 文件名 + 一句操作说明（两种语言各一行）
-- **Windows**: 发布与否、在哪里取（两种语言各一行）
+## 新增           （可选）
+- …
+
+## 修复
+- …
+
+## 已知问题
+- …
+
+## 安装
+- …
+
+## 致谢
+- …
 ```
+
+The two halves use the **same headings in the same order** (the Chinese ones are the translations
+of the English ones), and the same number of items under each heading. Item 2 in English is item 2
+in Chinese; a reader comparing the two must not have to map lists.
 
 Rules that matter more than the template:
 
-1. **Both languages say the same thing.** Not "a translation of the headline and a summary of the
-   rest" — a user reading either language must learn everything the other one learns.
-2. **Never renumber or split by language.** Item 2 in Chinese is item 2 in English; a reader
-   comparing two versions of the same release must not have to map lists.
-3. **Say what it does for the user, not what the commit did.** "游戏数据现在是一个文件，拷到手机上
+1. **English first.** It is the canonical text; the Chinese half is written from it.
+2. **Both halves say the same thing.** Not "a translation of the headline and a summary of the
+   rest" — a user reading either half must learn everything the other one learns.
+3. **Never split a section across the two halves.** All of Fixes is in one place, then all of
+   修复 is in the other.
+4. **Say what it does for the user, not what the commit did.** "游戏数据现在是一个文件，拷到手机上
    快得多" beats "switched romfs_arc.py to romfs_image.py" — and the English line says the same.
-4. **State what is NOT shipped.** If the Windows build is not in the release, both languages say so
-   in the same place (a reader who only reads one must not conclude the other platform shipped).
-5. **Credit contributors by name in both languages**, with the PR number.
+5. **State what is NOT shipped.** If the Windows build is not in the release, both halves say so in
+   the same section (a reader who only reads one must not conclude the other platform shipped).
+6. **Credit contributors by name in both halves**, with the PR number.
+
+The app's own update sheet (`UpdateSheet.swift`) reads the body and shows one language: it splits on
+the `**中文**` / `**English**` markers if they are there, and otherwise picks the lines whose
+characters belong to the reader's language. A body in the shape above works with both paths, so
+changing the template means checking that sheet's tests too.
 
 ## Where the text comes from
 
