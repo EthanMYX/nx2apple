@@ -45,6 +45,14 @@ jobs:
           OURS: ${{ steps.known.outputs.ours }}
           PATCHED: ${{ steps.known.outputs.patched }}
         run: |
+          # A sync PR carries upstream's own new files by design (hundreds of them, none in
+          # OURS or PATCHED because they are upstream's); the sync's own check_unprotected()
+          # already refused to write over an unprotected fork edit before this branch existed.
+          # Only normal PRs need the file-by-file guard.
+          if [[ "${GITHUB_HEAD_REF}" == sync/upstream-* ]]; then
+            echo "sync PR: the sync's own protection check ran; nothing to guard file by file."
+            exit 0
+          fi
           # changed files = base...head, minus deletions (nothing to protect there)
           BASE="${{ github.event.pull_request.base.sha }}"
           HEAD="${{ github.event.pull_request.head.sha }}"
