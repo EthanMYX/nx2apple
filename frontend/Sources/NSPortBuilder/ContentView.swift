@@ -1839,6 +1839,8 @@ final class BuildModel: ObservableObject {
         var present: Bool
         var installing = false
         var detail = ""
+        var lastError = ""   // the tool's own first error line after a failed install (brew's, pip's)
+        var fixHint = ""     // an L10n key: what to type or click, chosen from that line
         let installCmd: [String]      // run via bash; empty = manual (Xcode from the App Store)
     }
 
@@ -2181,18 +2183,66 @@ final class BuildModel: ObservableObject {
                 DispatchQueue.main.async { self.append("\n--- 安装输出 ---\n" + r.log) }
                 ok = r.ok
             } else {
+                let collected = LineBox()
                 ok = Self.runCaptured(["/bin/bash", "-c",
                      cmd.map { $0.contains(" ") ? "'" + $0 + "'" : $0 }.joined(separator: " ")],
                      env: ["PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
                            "HOME": NSHomeDirectory(), "NONINTERACTIVE": "1", "USER": NSUserName()])
-                { line in DispatchQueue.main.async { self.append(line + "\n") } }
+                { line in
+                    collected.append(line)
+                    DispatchQueue.main.async { self.append(line + "\n") }
+                }
+                let (error, fix) = Self.failureInfo(collected.lines)
+                DispatchQueue.main.async {
+                    if let j = self.deps.firstIndex(where: { $0.id == dep.id }) {
+                        self.deps[j].lastError = ok ? "" : error
+                        self.deps[j].fixHint = ok ? "" : fix
+                    }
+                }
             }
             DispatchQueue.main.async {
                 if let j = self.deps.firstIndex(where: { $0.id == dep.id }) { self.deps[j].installing = false }
+                if ok, let j = self.deps.firstIndex(where: { $0.id == dep.id }) { self.deps[j].lastError = ""; self.deps[j].fixHint = "" }
                 if !ok { self.doneNote = String(format: self.t("dep.install.fail"), self.t(dep.name)) }
                 self.checkDeps()
             }
         }
+    }
+
+    /// The line a failed install should show, and the fix to offer beside it.
+    ///
+    /// A GUI user sees a spinner turn back into a button; the reason (brew refusing a directory it
+    /// does not own is the common one) lived only in the log. Prefer the tool's own `Error:` line,
+    /// and map the few causes we can name to the exact command.
+    nonisolated static func failureInfo(_ lines: [String]) -> (error: String, fix: String) {
+        let meaningful = lines.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let error = meaningful.first { $0.hasPrefix("Error:") }
+            ?? meaningful.first { $0.lowercased().contains("error") }
+            ?? meaningful.last ?? ""
+        let lower = lines.joined(separator: "\n").lowercased()
+        let fix: String
+        if lower.contains("/opt/homebrew is not writable") || lower.contains("permission denied @ dir_initialize")
+            || lower.contains("/usr/local is not writable") {
+            fix = "dep.fix.brewOwner"
+        } else if lower.contains("command not found") || lower.contains("brew: not found") {
+            fix = "dep.fix.brewMissing"
+        } else if lower.contains("agreeing to the xcode license") || lower.contains("xcode license") {
+            fix = "dep.fix.xcodeLicense"
+        } else if lower.contains("could not resolve host") || lower.contains("failed to download")
+            || lower.contains("operation timed out") {
+            fix = "dep.fix.network"
+        } else {
+            fix = "dep.fix.log"
+        }
+        return (error, fix)
+    }
+
+    /// The output lines seen so far, from the pipe's threads and read on the main queue.
+    final class LineBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var box: [String] = []
+        func append(_ l: String) { lock.lock(); box.append(l); lock.unlock() }
+        var lines: [String] { lock.lock(); defer { lock.unlock() }; return box }
     }
 
     /// Run a command, streaming its output line by line to `line`. Returns success.
@@ -2828,13 +2878,29 @@ struct BuilderView: View {
             if m.depsOpen {
                 ForEach(m.deps, id: \.id) { d in
                     divider
-                    row(m.t(d.name), detail: m.shortPath(m.depDetail(d)), dot: d.present ? LauncherPalette.ready : LauncherPalette.building,
-                        help: m.t(d.hint)) {
-                        if d.installing {
-                            ProgressView().controlSize(.small)
-                            Text(m.t("dep.installing")).font(.manrope(12)).foregroundStyle(LauncherPalette.building)
-                        } else if !d.present {
-                            Button(d.installCmd.isEmpty ? m.t("dep.openAppStore") : m.t("dep.install")) { m.installDep(d) }
+                    VStack(alignment: .leading, spacing: 0) {
+                        row(m.t(d.name), detail: m.shortPath(m.depDetail(d)), dot: d.present ? LauncherPalette.ready : LauncherPalette.building,
+                            help: m.t(d.hint)) {
+                            if d.installing {
+                                ProgressView().controlSize(.small)
+                                Text(m.t("dep.installing")).font(.manrope(12)).foregroundStyle(LauncherPalette.building)
+                            } else if !d.present {
+                                Button(d.installCmd.isEmpty ? m.t("dep.openAppStore") : m.t("dep.install")) { m.installDep(d) }
+                            }
+                        }
+                        // Why the last install failed, and what to do about it: the tool's own
+                        // error line under the row, the fix (a command or a place to look) below it.
+                        if !d.lastError.isEmpty {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(d.lastError).font(.mono(11)).foregroundStyle(LauncherPalette.building)
+                                    .lineLimit(3).help(d.lastError)
+                                if !d.fixHint.isEmpty {
+                                    Text(m.t(d.fixHint)).font(.manrope(11.5)).foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                            .padding(.leading, 37).padding(.trailing, 18).padding(.bottom, 11)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
                 }
