@@ -61,7 +61,7 @@ OURS = {'dm/host/romfs_arc.c', 'dm/host/romfs_arc.h', 'dm/tools/romfs_arc.py',
 PATCHED = ('dm/host/hle_fs.c', 'dm/host/Makefile', 'dm/host/tests/Makefile', 'dm/ios/tools/build_ipa.sh',
            'scripts/build_ipa_from_nsp.py',
            'dm/ios/Sources/main.m', 'dm/gfx/nvn/nvn_mtl.m', 'dm/host/dm.h',
-           'dm/ios/tests/test_romfs_startup.py', 'dm/ios/tests/test_profile_pack.py', 'docs/env_switches.tsv', 'dm/host/front_mac.m', 'dm/games/0100A00019DE0000/game.tsv',
+           'dm/ios/tests/test_romfs_startup.py', 'dm/ios/tests/test_profile_pack.py', 'dm/ios/tests/test_ipa_unsigned.py', 'docs/env_switches.tsv', 'dm/host/front_mac.m', 'dm/games/0100A00019DE0000/game.tsv',
            # hand edits until issue #92, now patchers (see "Fork edits that had no protection" below)
            'dm/mac/launcher.c',
            'dm/host/hle_svc.c',
@@ -1199,6 +1199,43 @@ def patch_test_romfs_startup(t):
         t = done('test_romfs_startup dm_profile stub', t.replace(old, old + "\n                          " + repr(ROMFS_TEST_STUB), 1))
     return anchored('dm/ios/tests/test_romfs_startup.py', PICKED_EDITS)(t)
 
+def patch_ipa_unsigned(t):
+    """Upstream's unsigned-IPA tests assert upstream's default: the game files and the DLC are
+    packed into the package. The fork's default is the slim package (patch_build_ipa: the app reads
+    Documents/games/<id>/), with DM_FULL_ROMFS=1 to pack them. The tests are adapted to it rather
+    than skipped: they still check the mapping rules, from the fork's starting point."""
+    P = [(
+        """    def test_game_files_are_packed_by_default(self):
+        names = self.pack()
+        self.assertIn('Payload/DmIOS.app/romfs/marker', names)
+        self.assertIn('Payload/DmIOS.app/aoc/0/file', names)""",
+        """    def test_game_files_are_not_packed_by_default(self):
+        # The fork ships a slim IPA by default: the app reads Documents/games/<id>/ (patch_build_ipa).
+        names = self.pack()
+        self.assertFalse([n for n in names if '/romfs' in n or '/aoc' in n])
+
+    def test_full_romfs_packs_the_game_files(self):
+        names = self.pack(DM_FULL_ROMFS='1')
+        self.assertIn('Payload/DmIOS.app/romfs/marker', names)
+        self.assertIn('Payload/DmIOS.app/aoc/0/file', names)"""),
+    (
+        """        self.assertIn('Payload/DmIOS.app/aoc/0/file', names)   # add-on content has no place outside the app yet""",
+        """        self.assertFalse([n for n in names if '/aoc' in n], 'the fork copies add-on content beside the game data')"""),
+    (
+        """        names = self.pack(image=True, identity=got)   # bundle: exactly as before
+        self.assertIn('Payload/DmIOS.app/romfs.img', names); self.assertNotIn('Payload/DmIOS.app/romfs.id', names); self.assertIsNone(got[0][0])""",
+        """        names = self.pack(image=True, identity=got)   # the fork's default: the image stays out, its identity goes in
+        self.assertNotIn('Payload/DmIOS.app/romfs.img', names); self.assertIn('Payload/DmIOS.app/romfs.id', names); self.assertIsNotNone(got[0][0])"""),
+    ]
+    for old, new in P:
+        if new in t:
+            skip('test_ipa_unsigned.py (already patched)'); return t
+        if old not in t:
+            fail('dm/ios/tests/test_ipa_unsigned.py: a packing-default test is not in the shape the fork adapts')
+        t = t.replace(old, new, 1)
+    done('test_ipa_unsigned.py (slim default)')
+    return t
+
 def patch_test_profile_pack(t):
     """Upstream packs the RomFS into the IPA; the fork's default is the slim package (patch_build_ipa:
     DM_FULL_ROMFS=1 packs it), so the test checks that the RomFS stays out instead."""
@@ -1779,6 +1816,7 @@ MARKERS = {
     'dm/host/front_mac.m': 'DM_KEYMAP',
     'dm/ios/tests/test_romfs_startup.py': 'fixture_profile',
     'dm/ios/tests/test_profile_pack.py': 'slim package',
+    'dm/ios/tests/test_ipa_unsigned.py': 'slim IPA by default',
     'docs/env_switches.tsv': 'DM_FULL_ROMFS\t',
     'dm/mac/launcher.c': '.nx2apple-library',
     'dm/host/hle_svc.c': ('dm_profile()->mem_reserve',            # the patcher's product on upstream's text
@@ -1812,6 +1850,7 @@ PATCHERS = {
     'dm/host/front_mac.m': patch_front_mac,
     'dm/ios/tests/test_romfs_startup.py': patch_test_romfs_startup,
     'dm/ios/tests/test_profile_pack.py': patch_test_profile_pack,
+    'dm/ios/tests/test_ipa_unsigned.py': patch_ipa_unsigned,
     'docs/env_switches.tsv': patch_env_switches,
     'dm/mac/launcher.c': patch_launcher_c,
     'dm/host/hle_svc.c': patch_hle_svc,
