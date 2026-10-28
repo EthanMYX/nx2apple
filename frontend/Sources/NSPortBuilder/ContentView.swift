@@ -1870,6 +1870,14 @@ final class BuildModel: ObservableObject {
     /// the script with a message the user could not act on (issue #53).
     nonisolated static let minPython = (3, 12)
 
+    /// The Homebrew formulae the dependency check offers, with the localization key of each row. The repo-root
+    /// Brewfile lists the same formulae (BrewfileTests keeps the two equal).
+    nonisolated static let brewDeps: [(formula: String, key: String)] =
+        [("xcodegen", "dep.xcodegen"), ("zstd", "dep.zstd"), ("spirv-cross", "dep.spirv")]
+
+    /// Formulae the Brewfile also installs that the check does not ask for: glslang is only for OpenGL (LÖVE) games.
+    nonisolated static let optionalBrewFormulae = ["glslang"]
+
     /// The interpreter probe: lz4 / capstone / fontTools always, and zstd from either source —
     /// `compression.zstd` is built in from Python 3.14 and `backports.zstd` (which declares
     /// Python < 3.14) is the only option before that. Requiring the backport unconditionally
@@ -2093,7 +2101,7 @@ final class BuildModel: ObservableObject {
         out.append(Dep(id: "brew", name: "dep.brew", hint: "dep.brew.hint", present: brew != nil,
                        installCmd: ["/bin/bash", "-c",
                          "NONINTERACTIVE=1 /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""]))
-        for (pkg, key) in [("xcodegen", "dep.xcodegen"), ("zstd", "dep.zstd"), ("spirv-cross", "dep.spirv")] {
+        for (pkg, key) in brewDeps {
             let path = firstExisting(["/opt/homebrew/bin/\(pkg)", "/usr/local/bin/\(pkg)"])
             out.append(Dep(id: "brew:" + pkg, name: key, hint: key + ".hint", present: path != nil,
                            detail: path ?? "",
