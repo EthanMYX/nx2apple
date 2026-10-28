@@ -109,6 +109,7 @@ jobs:
             model=(--model "$TRIAGE_MODEL")   # one argument, never part of a shell string
             echo "model: $TRIAGE_MODEL"
           fi
+          # prompt.txt is at most 90000 bytes (triage_prepare.py), below the 128 KiB limit of one argument
           timeout 300 copilot "${model[@]}" -p "$(cat "$RUNNER_TEMP/triage/prompt.txt")" --silent --no-ask-user --no-custom-instructions \
             --no-auto-update --disable-builtin-mcps --disable-client-telemetry \
             --available-tools=view --allow-all-tools --deny-tool=shell --deny-tool=write --deny-tool=url \

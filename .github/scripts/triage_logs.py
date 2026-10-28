@@ -73,9 +73,11 @@ def finish_signals(sig):
 
 
 def norm(s):
-    """Normalise a line for matching: addresses and numbers become `#`, runs of space one space."""
-    s = re.sub(r'0x[0-9a-fA-F]+', '0x#', s)
-    s = re.sub(r'\b\d+\b', '#', s)
+    """Normalise a line for matching. Only fields that vary between runs become `#`: pointers and addresses (0x with 8 or more hex digits)
+    and long decimal numbers (4 or more digits: sizes, counts, timestamps). Result codes and constants (`0xd401`, `0xce01`, `-6`, `+0`) stay literal:
+    they are what tells one entry from another."""
+    s = re.sub(r'0x[0-9a-fA-F]{8,}', '0x#', s)
+    s = re.sub(r'(?<![\w.])\d{4,}(?![\w.])', '#', s)
     return re.sub(r'\s+', ' ', s).strip()
 
 
@@ -138,14 +140,20 @@ def found_on(docs_dir, href):
             break
     if start is None:
         return []
-    games = []
+    games, seen, in_found = [], set(), False
     for line in lines[start:]:
         m = re.match(r'^(#{1,6}) ', line)
         if m and len(m[1]) <= level:
             break
         if line.startswith('- **Found on:**'):
-            for name, tid in re.findall(r'\[([^\]]+)\]\((?:\.\./)*dm/games/([0-9A-Fa-f]{16})/README\.md\)', line):
-                games.append({'name': name, 'title_id': tid.upper(), 'url': f'{BLOB}dm/games/{tid.upper()}/README.md'})
+            in_found = True
+        elif in_found and (line.startswith('- ') or (line.strip() and not line[0].isspace())):
+            in_found = False   # the next top-level bullet or paragraph ends the block; indented lines and blanks belong to it
+        if in_found:
+            for name, tid in re.findall(r'\[([^\]]+)\]\((?:\.\./)*dm/games/([0-9A-Fa-f]{16})/README\.md(?:#[^)\s]*)?\)', line):
+                if tid.upper() not in seen:
+                    seen.add(tid.upper())
+                    games.append({'name': name, 'title_id': tid.upper(), 'url': f'{BLOB}dm/games/{tid.upper()}/README.md'})
     return games[:6]
 
 

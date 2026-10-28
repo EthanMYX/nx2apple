@@ -38,12 +38,15 @@ SERVICES = """# Services
 
 class Extract(unittest.TestCase):
     def test_signals(self):
-        log = ["[dm] boot", "12:00 [RED] audren: a second renderer 7", "12:01 [RED] audren: a second renderer 9",
-               "[RED] MapMemory refused (0xd401): 0x1000", "[RED] MapMemory refused (0xd402): 0x2000",
+        log = ["[dm] boot", "12:00 [RED] audren: a second renderer 70001", "12:00 [RED] audren: a second renderer 90002",
+               "[RED] MapMemory refused (0xd401): 0x7f8a00001000", "[RED] MapMemory refused (0xd401): 0x7f8a00002000",
                "[dm] CRASH sig=10 (stderr held)", "fork patches: a, b", "noise"]
         s = tl.finish_signals(tl.extract_signals(log))
         self.assertEqual([c for _, c in s['red']], [2, 2])   # folded: same line, only numbers differ
         self.assertEqual(len(s['crash']), 1)
+        # a different result code is a different line
+        s2 = tl.finish_signals(tl.extract_signals(['[RED] MapMemory refused (0xd401): x', '[RED] MapMemory refused (0xce01): x']))
+        self.assertEqual(len(s2['red']), 2)
         self.assertEqual(s['fork_patches'], ['fork patches: a, b'])
 
     def test_caps(self):
@@ -84,9 +87,28 @@ class Match(unittest.TestCase):
         self.assertEqual([g['title_id'] for g in h['found_on']], ['010051701FB46000', '0100A6301214E000'])
 
     def test_numbers_do_not_matter(self):
-        hits = tl.match_symptoms(['[RED] audren: no DeviceSink (ID 0x99) in the command list, 7 commands of 0x10 bytes'], self.syms, self.docs)
+        hits = tl.match_symptoms(['[RED] audren: no DeviceSink (ID 0x10) in the command list, 0 commands of 0x148 bytes'], self.syms, self.docs)
         self.assertEqual([h['entry'] for h in hits], ['SDK 4: DeviceSink'])
         self.assertEqual(hits[0]['found_on'], [])   # its reference file is not there
+
+    def test_result_codes_are_not_wildcards(self):
+        # the 0xd401 entries are about stack memory; 0xce01 (mapping table full) is another failure and must not match them
+        self.assertEqual(tl.match_symptoms(['[RED] MapMemory refused (0xce01): 0x7f8a00001000'], self.syms, self.docs), [])
+        hits = tl.match_symptoms(['[RED] MapMemory refused (0xd401): 0x7f8a00001000 <- 0x1'], self.syms, self.docs)
+        self.assertEqual([h['entry'] for h in hits], ['Thread stacks'])
+
+    def test_norm(self):
+        self.assertEqual(tl.norm('0xd401 0x7f8a00001000 -6 +0 1234567 12'), '0xd401 0x# -6 +0 # 12')
+
+    def test_found_on_indented_block_and_anchors(self):
+        (self.docs / 'reference' / 'rendering.md').write_text(
+            "## R\n\n### Conditional\n\n- **Fix:** x\n- **Found on:**\n"
+            "  - [Zelda](../../dm/games/0100F2C0115B6000/README.md): wraps clears.\n"
+            "  - [Mario vs. DK](../../dm/games/0100B99019412000/README.md#render) (skips clears).\n"
+            "  - [Zelda](../../dm/games/0100F2C0115B6000/README.md) again\n"
+            "- **Check:** [Not a game](../../dm/games/0100000000000000/README.md)\n\n### Next\n")
+        self.assertEqual([g['title_id'] for g in tl.found_on(self.docs, '../reference/rendering.md#conditional')],
+                         ['0100F2C0115B6000', '0100B99019412000'])
 
     def test_no_hit(self):
         self.assertEqual(tl.match_symptoms(['[RED] something entirely new happened here'], self.syms, self.docs), [])
@@ -115,6 +137,16 @@ class RealIndex(unittest.TestCase):
         # every linked entry has its heading in its reference file (found_on returns a list, never raises)
         for e in syms[:40]:
             self.assertIsInstance(tl.found_on(docs, e['href']), list)
+
+
+class RealRendering(unittest.TestCase):
+    @unittest.skipUnless((REPO_ROOT / 'docs/reference/rendering.md').is_file(), 'no vendored docs')
+    def test_conditional_rendering_entry_lists_its_games(self):
+        docs = REPO_ROOT / 'docs'
+        syms = tl.parse_symptoms((docs / 'agents/symptoms.md').read_text(encoding='utf-8'))
+        hits = tl.match_symptoms(['[RED] SetRenderEnableConditional: the host draws anyway'], syms, docs)
+        self.assertTrue(hits)
+        self.assertGreaterEqual(len(hits[0]['found_on']), 3)
 
 
 class Attachments(unittest.TestCase):

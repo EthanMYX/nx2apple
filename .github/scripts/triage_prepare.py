@@ -18,6 +18,7 @@ import triage_logs as tl  # noqa: E402
 ALLOWED_LABELS = ['game', 'build', 'launcher', 'ios', 'mac', 'idea', 'question', 'needs-info', 'duplicate']
 SKIP_LABEL = 'no-triage'
 BODY_CAP = 12000
+MAX_PROMPT_BYTES = 90000   # one command-line argument holds 128 KiB on Linux; stay well below, whatever characters the issue uses
 TITLE_CAP = 300
 
 # Form fields that must have an answer, by the heading the issue form renders ("### <label>"); an empty field shows `_No response_`.
@@ -57,31 +58,44 @@ def sections(body):
     return {k: '\n'.join(v).strip() for k, v in out.items()}
 
 
-def analyse_form(body, signals_found, has_attachment):
-    """What the issue says about itself: whether it came from a form, which required answers are empty, a kind hint."""
+LOG_FIELDS = ("The game's log", 'Build log')
+NO_ANSWER = ('', '_No response_')
+APP_VERSION = re.compile(r'\bv\d+\.\d+(?:\.\d+)?\b|\bNX2Apple\b[^\n]{0,40}?\bv?\d+\.\d+|\b(?:app|launcher) version\W{0,3}v?\d+\.\d+', re.I)
+OS_VERSION = re.compile(r'\b(?:mac ?os(?: x)?|ios|ipados)\s+(?:[a-z]+\s+)?v?\d+(?:\.\d+)*', re.I)
+FENCED_LOG = re.compile(r'```[^\n]*\n(?:[^\n]*\n){5,}?```')
+
+
+def analyse_form(body, readable_attachments):
+    """What the issue says about itself: whether it came from a form, which required answers are empty, a kind hint.
+
+    The log counts as given when its own form field has text or a log attachment could be read; a `[RED]` line quoted in another field
+    does not. `Copy diagnostics` is not asked of an idea (the form says it is not needed)."""
     sec = sections(body)
     from_form = any(h in sec for h in ('NX2Apple version', 'No keys, no game files', 'Game, title ID and versions'))
     missing, kind, target = [], None, None
     if from_form:
-        for h, name in REQUIRED.items():
-            if h in sec and sec[h] in ('', '_No response_'):
-                if h in ("The game's log", 'Build log') and (signals_found or has_attachment):
-                    continue
-                missing.append(name)
         for h, k in KIND_HEADINGS.items():
             if h in sec:
                 kind = k
         if sec.get('This is', '').startswith('An idea'):
             kind = 'idea'
+        for h, name in REQUIRED.items():
+            if h not in sec or sec[h] not in NO_ANSWER:
+                continue
+            if h == 'Copy diagnostics' and kind == 'idea':
+                continue
+            if h in LOG_FIELDS and readable_attachments:
+                continue
+            missing.append(name)
         w = sec.get('Where it runs', '') + ' ' + sec.get('Built for', '')
         target = 'ios' if re.search(r'iPhone|iPad', w) else 'mac' if 'Mac' in w else None
     else:
         text = body or ''
-        if not re.search(r'\bv?\d+\.\d+(\.\d+)?\b', text):
+        if not APP_VERSION.search(text):
             missing.append('NX2Apple version')
-        if not re.search(r'macos|ios|ipados|iphone|ipad|\bmac\b|sequoia|tahoe|sonoma', text, re.I):
-            missing.append('computer or device and OS version')
-        if not (signals_found or has_attachment or text.count('\n') > 30):
+        if not OS_VERSION.search(text):
+            missing.append('macOS or iOS / iPadOS version')
+        if not (readable_attachments or FENCED_LOG.search(text)):
             missing.append('the log (or Copy diagnostics)')
     return {'from_form': from_form, 'missing': missing, 'kind_hint': kind, 'target_hint': target}
 
@@ -107,6 +121,28 @@ def candidates(repo, number, title):
         return []
     return [{'number': r['number'], 'title': r['title'][:200], 'state': r['state'], 'labels': [l['name'] for l in r.get('labels', [])]}
             for r in rows if r['number'] != number][:6]
+
+
+def build_prompt(template, data, cap=MAX_PROMPT_BYTES):
+    """The template with the data as JSON, at most `cap` bytes of UTF-8: the issue body is cut (halved until it fits), then the log lines."""
+    def render():
+        return template.replace('{{DATA}}', json.dumps(data, ensure_ascii=False))
+
+    def size(text):
+        return len(text.encode('utf-8', 'replace'))
+    body = data['issue']['body']
+    while size(render()) > cap and body:
+        body = body[:len(body) // 2]
+        data['issue']['body'] = body
+        data['issue']['body_truncated'] = True
+    for key in ('red', 'crash'):
+        while size(render()) > cap and data['log_signals'][key]:
+            data['log_signals'][key].pop()
+    while size(render()) > cap and data['symptom_matches']:
+        data['symptom_matches'].pop()
+    while size(render()) > cap and data['issue']['title']:
+        data['issue']['title'] = data['issue']['title'][:len(data['issue']['title']) // 2]
+    return render()
 
 
 def set_output(**kv):
@@ -150,15 +186,20 @@ def main(argv=None):
     body = (issue.get('body') or '')
     sig = tl.extract_signals(body.splitlines())
     urls = tl.attachment_urls(body)
-    fetched = 0
+    readable = 0   # attachments that gave at least one line of text (a screenshot or a failed download gives none)
     for u in urls:
+        count = [0]
+
+        def counted(lines):
+            for line in lines:
+                count[0] += 1
+                yield line
         try:
-            sig = tl.extract_signals(tl.fetch_lines(u), sig)
-            fetched += 1
+            sig = tl.extract_signals(counted(tl.fetch_lines(u)), sig)
         except Exception as e:  # a dead or refused link must not stop triage
             print(f'attachment not read ({type(e).__name__}): {u}')
+        readable += count[0] > 0
     signals = tl.finish_signals(sig)
-    found = bool(signals['red'] or signals['crash'] or signals['fork_patches'])
 
     symptoms = tl.parse_symptoms((Path(a.docs) / 'agents' / 'symptoms.md').read_text(encoding='utf-8'))
     matches = tl.match_symptoms([l for l, _ in signals['red']], symptoms, a.docs)
@@ -166,17 +207,17 @@ def main(argv=None):
     data = {
         'issue': {'number': issue['number'], 'title': title, 'body': body[:BODY_CAP], 'body_truncated': len(body) > BODY_CAP,
                   'author_association': issue.get('author_association')},
-        'form': analyse_form(body, found, bool(urls)),
+        'form': analyse_form(body, readable),
         'log_signals': {'red': [{'line': l, 'count': c} for l, c in signals['red']],
                         'crash': [{'line': l, 'count': c} for l, c in signals['crash']],
-                        'fork_patches': signals['fork_patches'], 'attachments_found': len(urls), 'attachments_read': fetched},
+                        'fork_patches': signals['fork_patches'], 'attachments_found': len(urls), 'attachments_read': readable},
         'symptom_matches': matches,
         'duplicate_candidates': candidates(a.repo, issue['number'], title),
         'allowed_labels': ALLOWED_LABELS,
     }
-    (out / 'input.json').write_text(json.dumps(data, ensure_ascii=True, indent=1), encoding='utf-8')
-    prompt = Path(a.prompt).read_text(encoding='utf-8').replace('{{DATA}}', json.dumps(data, ensure_ascii=True))
-    (out / 'prompt.txt').write_text(prompt, encoding='utf-8')
+    prompt = build_prompt(Path(a.prompt).read_text(encoding='utf-8'), data)
+    (out / 'input.json').write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding='utf-8', errors='replace')
+    (out / 'prompt.txt').write_text(prompt, encoding='utf-8', errors='replace')
     set_output(skip='false', reason='')
     return 0
 

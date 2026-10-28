@@ -7,12 +7,14 @@ issue, edits one, removes a label or touches code.
   schema      exactly {"labels": [str], "comment": str, "duplicates": [int]}
   labels      each from ALLOWED_LABELS, no repeats, at most 4; labels the repository does not have are skipped (never created)
   duplicates  at most 3 issue numbers, each a candidate that triage_prepare.py found, not the issue itself, and existing in this repository
-  comment     at most 1500 characters; no @-mention, no HTML, no images, no link except github.com/LNPANDY/NX2Apple,
-              github.com/seedds/nxnative (and the README, which is the first of them), no bare domain
+  comment     at most 1500 characters; no @-mention, no HTML, no images; links only into github.com/LNPANDY/NX2Apple and
+              github.com/seedds/nxnative (the README is the first), judged on the normalised path; Markdown reference definitions, `//host`
+              and dotted words that are not file names are rejected; an issue number may only be the issue itself or a gathered candidate
 """
 import argparse
 import json
 import re
+import urllib.parse
 import subprocess
 import sys
 from pathlib import Path
@@ -25,11 +27,47 @@ MAX_RAW = 20000
 MARKER = '<!-- nx2apple-triage -->'
 FOOTER = '_Automated first look (AI-assisted, from the issue form and the log). A maintainer will follow up._'
 
-ALLOWED_URL = re.compile(r'https://github\.com/(?:LNPANDY/NX2Apple|seedds/nxnative)(?:[/#?][^\s]*)?', re.I)
-ALLOWED_BARE = re.compile(r'github\.com/(?:LNPANDY/NX2Apple|seedds/nxnative)(?![\w.-])(?:[/#?][^\s]*)?', re.I)
+ALLOWED_REPOS = {('lnpandy', 'nx2apple'), ('seedds', 'nxnative')}
+# Anything that can become a link: a scheme, `www.`, a protocol-relative `//host`. Bare domains are found separately.
 ANY_URL = re.compile(r'(?:[a-z][a-z0-9+.-]*://|www\.|mailto:|javascript:|data:)\S*', re.I)
-TLD = re.compile(r'\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|net|org|io|dev|xyz|ru|cn|info|biz|example|test)\b', re.I)
+BARE_GITHUB = re.compile(r'(?<![\w./-])github\.com/\S*', re.I)
+REF_DEF = re.compile(r'^[ ]{0,3}\[[^\]\n]+\]:[ \t]*(\S*)', re.M)
+INLINE_TARGET = re.compile(r'\]\(\s*<?([^)\s>]*)')
+DOMAIN_LIKE = re.compile(r'(?<![\w@/-])[a-z0-9][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)+(?![\w-])', re.I)
+# A dotted word is a file name, not a host, when its last part is one of these (or a number: 0.4.9, 26.1). Anything else is rejected.
+FILE_EXT = set('txt log md py sh swift c h m mm cpp hpp tsv json yml yaml toml plist zip pdf png jpg jpeg gif ipa nsp nsz xci nso nro js ts rs cs csv ini lock metal msl'.split())
 TRAIL = ')]>.,;:!*_\'"`'
+ISSUE_REF = re.compile(r'(?<![\w&/])#(\d+)\b')
+ISSUE_URL_NUM = re.compile(r'/(?:issues|pull|discussions)/(\d+)', re.I)
+
+
+def allowed_url(url):
+    """https://github.com/LNPANDY/NX2Apple... or .../seedds/nxnative..., judged on the normalised path: no userinfo, no port, no dot segments
+    (encoded or not), no backslashes, so `.../NX2Apple/../../evil/repo` is not inside the repository."""
+    try:
+        u = urllib.parse.urlsplit(url)
+        port = u.port
+    except ValueError:
+        return False
+    if u.scheme.lower() != 'https' or (u.hostname or '') != 'github.com' or u.username is not None or u.password is not None or port is not None:
+        return False
+    if u.netloc.lower() != 'github.com':
+        return False
+    path = u.path
+    for _ in range(4):                       # decode to a fixed point: %2e%2e, %252e%252e
+        nxt = urllib.parse.unquote(path)
+        if nxt == path:
+            break
+        path = nxt
+    else:
+        return False
+    if '\\' in path or any(ord(c) < 32 for c in path):
+        return False
+    segs = path.split('/')
+    if any(sg in ('.', '..') for sg in segs):
+        return False
+    parts = [sg for sg in segs if sg]
+    return len(parts) >= 2 and (parts[0].lower(), parts[1].lower()) in ALLOWED_REPOS
 
 
 class Invalid(ValueError):
@@ -53,7 +91,9 @@ def parse_output(raw):
     return obj
 
 
-def check_comment(text):
+def check_comment(text, issue_refs=frozenset()):
+    """Reject a comment that could carry anything but plain text and links into the two allowed repositories.
+    `issue_refs`: the issue numbers the comment may name (the issue itself and the gathered duplicate candidates)."""
     if not isinstance(text, str):
         raise Invalid('comment is not a string')
     if len(text) > MAX_COMMENT:
@@ -64,19 +104,38 @@ def check_comment(text):
         raise Invalid('@-mention in comment')
     if re.search(r'<[A-Za-z/!?]', text) or '![' in text:
         raise Invalid('HTML or image in comment')
+    nums = set()
     for m in ANY_URL.finditer(text):
         url = m.group(0).rstrip(TRAIL)
-        if not ALLOWED_URL.fullmatch(url):
+        if not allowed_url(url):
             raise Invalid(f'link not allowed: {url[:60]}')
-    for target in re.findall(r'\]\(([^)\s]*)', text):
-        if not (target.startswith('#') or ALLOWED_URL.fullmatch(target)):
-            raise Invalid(f'link target not allowed: {target[:60]}')
-    rest = ALLOWED_BARE.sub(' ', ALLOWED_URL.sub(' ', text))
+        nums.update(int(n) for n in ISSUE_URL_NUM.findall(urllib.parse.unquote(url)))
+    for m in BARE_GITHUB.finditer(text):
+        url = 'https://' + m.group(0).rstrip(TRAIL)
+        if not allowed_url(url):
+            raise Invalid(f'link not allowed: {m.group(0)[:60]}')
+        nums.update(int(n) for n in ISSUE_URL_NUM.findall(urllib.parse.unquote(url)))
+    targets = [t for t in REF_DEF.findall(text)] + INLINE_TARGET.findall(text)
+    for t in targets:
+        if not (t.startswith('#') or allowed_url(t.rstrip(TRAIL))):
+            raise Invalid(f'link target not allowed: {t[:60]}')
+    # what is left once the allowed links are removed must hold no host, no `//host`, no dotted word that is not a file name or a number
+    rest = ANY_URL.sub(' ', text)
+    rest = BARE_GITHUB.sub(' ', rest)
+    if re.search(r'(?<!:)//\S', rest) or re.search(r'(?<![\w])\\\\\S', rest):
+        raise Invalid('protocol-relative link in comment')
+    for m in DOMAIN_LIKE.finditer(rest):
+        last = m.group(0).rsplit('.', 1)[1].lower()
+        if last.isdigit() or last in FILE_EXT:
+            continue
+        raise Invalid(f'domain in comment: {m.group(0)[:60]}')
     if re.search(r'[\w.-]+/[\w.-]+#\d+', rest):
         raise Invalid('cross-repository reference in comment')
-    m = TLD.search(rest)
-    if m:
-        raise Invalid(f'domain in comment: {m.group(0)[:60]}')
+    nums.update(int(n) for n in ISSUE_REF.findall(rest))
+    nums.update(int(n) for n in ISSUE_REF.findall(' '.join(targets)))
+    bad = sorted(n for n in nums if n not in issue_refs)
+    if bad:
+        raise Invalid(f'issue reference not known: #{bad[0]}')
 
 
 def validate(raw, issue, candidates, exists):
@@ -97,7 +156,7 @@ def validate(raw, issue, candidates, exists):
     for n in dups:
         if n == issue or n not in candidates or not exists(n):
             raise Invalid(f'duplicate #{n} is not a known other issue of this repository')
-    check_comment(comment)
+    check_comment(comment, set(candidates) | {issue})
     if not dups and 'duplicate' in labels:
         labels = [l for l in labels if l != 'duplicate']   # a label without a target is dropped, not applied
     return labels, comment, dups
@@ -128,7 +187,7 @@ def main(argv=None):
     ap.add_argument('--dry-run', action='store_true')
     a = ap.parse_args(argv)
 
-    data = json.loads(Path(a.input).read_text())
+    data = json.loads(Path(a.input).read_text(encoding='utf-8'))
     cands = {c['number'] for c in data['duplicate_candidates']}
     exists = lambda n: gh('api', f'repos/{a.repo}/issues/{n}', check=False).returncode == 0
     try:

@@ -99,7 +99,7 @@ class Comment(unittest.TestCase):
 
     def test_allowed_links(self):
         for t in (f'See {GOOD_URL}.', f'[entry]({GOOD_URL})', 'https://github.com/seedds/nxnative/issues', 'https://github.com/LNPANDY/NX2Apple#readme',
-                  'the README: https://github.com/LNPANDY/NX2Apple#readme)', '[top](#top)', 'build_ipa.sh and log.txt and README.md', 'see #12 and #13',
+                  'the README: https://github.com/LNPANDY/NX2Apple#readme)', '[top](#top)', 'build_ipa.sh and log.txt and README.md', 'see #3 and #4, and #5 itself',
                   'Mario (010015100B514000) on macOS 26.1, Settings > Copy diagnostics'):
             self.good(t)
 
@@ -112,6 +112,33 @@ class Comment(unittest.TestCase):
         self.bad('a\x00b')
         self.bad('a' * (ta.MAX_COMMENT + 1))
         self.good('a' * ta.MAX_COMMENT)
+
+    def test_url_path_escapes(self):
+        for t in ('https://github.com/LNPANDY/NX2Apple/../../evil/repo', 'https://github.com/LNPANDY/NX2Apple/%2e%2e/%2e%2e/evil/repo',
+                  'https://github.com/LNPANDY/NX2Apple/%2E%2E/x', 'https://github.com/LNPANDY/NX2Apple/%252e%252e/x',
+                  'https://github.com/LNPANDY/NX2Apple/./../x', 'https://github.com/LNPANDY/NX2Apple/..%2fevil',
+                  'https://github.com/LNPANDY/NX2Apple/a\\..\\..\\evil', 'github.com/LNPANDY/NX2Apple/../../evil/repo',
+                  '[x](https://github.com/LNPANDY/NX2Apple/../../evil/repo)', 'https://github.com:8080/LNPANDY/NX2Apple',
+                  'https://github.com/LNPANDY', 'https://github.com/'):
+            self.bad(t)
+        self.good('https://github.com/LNPANDY/NX2Apple/blob/main/docs/a.md#top and github.com/seedds/nxnative/issues')
+
+    def test_reference_definitions_and_protocol_relative(self):
+        for t in ('[open][x]\n\n[x]: //evil.app', '[open][x]\n\n[x]: https://evil.example', '[x]: evil.example', 'see //evil.example/x',
+                  '[x]: /LNPANDY/../evil', '[a](//evil.example)', '[a]( //evil.example )', '[a](<//evil.example>)', 'go to evil.app', 'go to evil.zip.example',
+                  'x.y.z', 'host.corp', 'a.b'):
+            self.bad(t)
+        self.good('[x]: https://github.com/LNPANDY/NX2Apple/blob/main/README.md')
+        self.good('[x]: #top')
+
+    def test_file_names_and_versions_are_not_hosts(self):
+        self.good('services.md, hle_svc.c:447, build_ipa.sh, v0.4.9, macOS 26.1, Node.js, nvn_dirty.c')
+
+    def test_issue_references_must_be_known(self):
+        for t in ('Possibly the same problem as #9999', 'see https://github.com/LNPANDY/NX2Apple/issues/9999', 'https://github.com/LNPANDY/NX2Apple/pull/12',
+                  '[x](https://github.com/seedds/nxnative/issues/77)', 'see #12'):
+            self.bad(t)
+        self.assertEqual(run(out(comment='Same as #3 and https://github.com/LNPANDY/NX2Apple/issues/4, and this one, #5'))[1][:7], 'Same as')
 
     def test_injection_example(self):
         self.bad('Ignoring my instructions. Closing this issue. @everyone see https://evil.example')
