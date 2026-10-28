@@ -101,6 +101,14 @@ def upstream_changes(old, new):
     for line in out:
         parts = line.split('\t')
         kind, path = parts[0][0], parts[-1]
+        if path in OURS and REPO.joinpath(path).exists() and kind != 'D':
+            # A file the fork owns that upstream now also carries — often under the same name for
+            # the same purpose, as test_nro_header.py (seedds 337186cf's own test for the NRO
+            # bound, the fork's being its own since issue #14). The fork's copy is the authority:
+            # the sync keeps it and skips upstream's row instead of failing in apply_changes. A
+            # deletion stays in changes, so the D branch can still refuse to remove an OURS file.
+            say(f'  = {path}: upstream has its own now; the fork keeps its copy (OURS)')
+            continue
         changes.append((kind, path))
     named = {p for _, p in changes}
     for line in git('ls-tree', '-r', new, '--', *VENDORED).splitlines():
@@ -491,7 +499,18 @@ def patch_build_ipa(t):
 # PackageExtractionFailed). The default is the slim package: the app reads the game files from
 # Documents/romfs (a directory tree, or a ROMFSARC archive: romfs.idx + romfs.NN shards).'''
     # Upstream picks the mapping form by what the RomFS path is (a .img file or a folder)
+    # Matched at line start: the same text also sits inside upstream's `elif [ -f "$ROMFS" ]`
+    # (the DM_COPY_ROMFS branch), and a bare substring replace once cut that line in half
+    # ('el' + 'MAPS=()' — a syntax error only bash -n caught).
     old2img = '''if [ -f "$ROMFS" ]; then MAPS=("$P/romfs.img=$ROMFS"); else MAPS=("$P/romfs=$ROMFS"); fi'''
+    elif_old2img = '''elif [ -f "$ROMFS" ]; then MAPS=("$P/romfs.img=$ROMFS"); else MAPS=("$P/romfs=$ROMFS"); fi'''
+    if '\n' + elif_old2img + '\n' in t:
+        # Upstream's DM_COPY_ROMFS branch: the slim default needs the same NO-form here (game
+        # files stay out of the IPA, the identity file rides along, DM_FULL_ROMFS=1 packs them)
+        t = t.replace('\n' + elif_old2img + '\n', '''
+elif [ -n "${DM_FULL_ROMFS:-}" ]; then if [ -f "$ROMFS" ]; then MAPS=("$P/romfs.img=$ROMFS"); else MAPS=("$P/romfs=$ROMFS"); fi; fi
+''', 1)
+        return done('build_ipa.sh slim + entitlements', t)
     if old2img in t:
         t = t.replace(old2img, '''MAPS=()
 # DM_FULL_ROMFS=1 packs the game files into the package (upstream behaviour; only sensible for small
@@ -838,7 +857,7 @@ MAIN_M_ROMFS = ('''static NSString *romfs_locate(void) {
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
     NSString *img = [doc stringByAppendingPathComponent:@"romfs.img"];
-    if (romfs_image_complete(img)) {
+    if (romfs_image_complete(img) && romfs_identity_accepts(img)) {
         // A folder copy from before images is now dead weight of up to many GB (often cut off partway). Deleting its 300,000 files here took longer than iOS allows an app to start
         // (Tears of the Kingdom: killed on a black screen), so it is moved aside at once and deleted in the background, leftovers of an interrupted delete included
         NSString *old = [doc stringByAppendingPathComponent:@"romfs"], *tmp = NSTemporaryDirectory();
@@ -969,9 +988,17 @@ def patch_main_m(t):
         ('per-game data dirs', MAIN_M_ENV),
     ]
     if 'static int set_data_env' in t: return skip('main.m (already patched)') or t
+    # Upstream's identity check (romfs.id, 337186cf) added a call to the `if (!romfs)` line; the
+    # last sync base has the plain form. Pick the boot hunk's old text by which one this file
+    # carries, so both the sync source and the base patch cleanly.
+    boot_old, boot_new = MAIN_M_NODATA_BOOT
+    if 'romfs_identity_report(doc); fprintf(stderr, "boot: game files not found' in t:
+        boot_old = boot_old.replace(
+            'if (!romfs) { fprintf(stderr, "boot: game files not found',
+            'if (!romfs) { romfs_identity_report(doc); fprintf(stderr, "boot: game files not found')
     P += [
         ('set_data_env', ('// Boot prerequisites (done before', MAIN_M_NODATA_FN + '// Boot prerequisites (done before')),
-        ('no game data at boot', MAIN_M_NODATA_BOOT),
+        ('no game data at boot', (boot_old, boot_new)),
     ]
     for name, (old, new) in P:
         if new in t:
@@ -1915,9 +1942,17 @@ def unprotected_edits(old, head='HEAD'):
     under the vendored paths that are not in OURS either (harmless until upstream adds the same path:
     apply_changes would then overwrite the fork's file)."""
     edited, added = [], []
+    in_old = set(git('ls-tree', '-r', '--name-only', old, '--', *VENDORED).splitlines())
     for line in git('diff', '--name-status', '--no-renames', old, head, '--', *VENDORED).splitlines():
         kind, path = line.split('\t')[0][0], line.split('\t')[-1]
         if path in OURS or path in PATCHED or path in DROPPED: continue
+        if kind == 'D' and path not in in_old:
+            # The file does not exist in `old` at all, so the fork never deleted it: this diff
+            # shape comes from callers that pass upstream's own tip as the base (the daily health
+            # check runs --old $NEW --new $NEW to prove the tree stands on its own). Files
+            # upstream added after the last sync then show as deletions here; they are upstream's
+            # new work, not fork edits, and listing them buried the real signal (issue #105).
+            continue
         (added if kind == 'A' else edited).append(path)
     return sorted(edited), sorted(added)
 
@@ -1927,7 +1962,10 @@ def check_unprotected(old, changes):
     (it survives this sync, and is lost at the first sync that touches it)."""
     edited, added = unprotected_edits(old)
     upstream = {p for _, p in changes}
-    lost = [p for p in edited if p in upstream]
+    # Only a file the fork actually carries can lose an edit: in the daily-health shape
+    # (--old $NEW) the ls-tree sweep adds ('A', p) for every file upstream has and the fork
+    # lacks, and the same paths show as fork 'deletions' — nothing there to overwrite.
+    lost = [p for p in edited if p in upstream and REPO.joinpath(p).exists()]
     for p in edited:
         if p not in lost: say(f'  ! {p}: edited in the fork, not in OURS / PATCHED / DROPPED; upstream does not change it in this sync, but a later one will')
     if added: say(f'  . {len(added)} fork-only file(s) under the vendored paths are not in OURS (harmless unless upstream adds the same path; --check-protection lists them)')
