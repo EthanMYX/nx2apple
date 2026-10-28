@@ -106,7 +106,11 @@ final class BuildModel: ObservableObject {
     /// --platform mac-app). A Mac app is a different output of the same pipeline, not a
     /// different pipeline: same extraction, rewrite and shaders, then dm/mac/pack_app.py.
     @Published var target = (UserDefaults.standard.string(forKey: "buildTarget") ?? "ios") {
-        didSet { UserDefaults.standard.set(target, forKey: "buildTarget") }
+        didSet {
+            UserDefaults.standard.set(target, forKey: "buildTarget")
+            // A Mac-only setup needs no iOS SDK for a Mac build, but does for an iPhone one (needsIOSPlatform)
+            if oldValue != target, UserDefaults.standard.string(forKey: OnboardingDefaults.platform) == "mac" { checkDeps() }
+        }
     }
     /// Decode BC-compressed textures on the CPU. Only relevant for GPUs without BC support
     /// (A15/A16 and older): on a device that has it the GPU path is always better, so the switch
@@ -851,7 +855,7 @@ final class BuildModel: ObservableObject {
     var dlcPaths: [String] { slot("dlc").paths }
 
     func slot(_ id: String) -> Slot { slots.first { $0.id == id } ?? slots[0] }
-    private func updateSlot(_ id: String, _ body: (inout Slot) -> Void) {
+    func updateSlot(_ id: String, _ body: (inout Slot) -> Void) {
         if let i = slots.firstIndex(where: { $0.id == id }) { body(&slots[i]) }
     }
 
@@ -2078,7 +2082,18 @@ final class BuildModel: ObservableObject {
         return FileManager.default.fileExists(atPath: dir, isDirectory: &isDir) && isDir.boolValue
     }
 
-    nonisolated static func detectDepsSync() -> [Dep] {
+    /// The commands that fetch Xcode's two downloadable parts; the setup panel and the guided setup run the same ones.
+    nonisolated static let metalToolchainCmd = ["/usr/bin/xcodebuild", "-downloadComponent", "MetalToolchain"]
+    nonisolated static let iosPlatformCmd = ["/usr/bin/xcodebuild", "-downloadPlatform", "iOS"]
+
+    /// Whether the xcode row asks for the iOS SDK. Always, as before, unless the guided setup stored a Mac-only choice
+    /// and builds are for the Mac: upstream no longer needs the iOS SDK for a Mac build (c464cb24).
+    nonisolated static func needsIOSPlatform(defaults: UserDefaults = .standard) -> Bool {
+        guard defaults.string(forKey: OnboardingDefaults.platform) == "mac" else { return true }
+        return (defaults.string(forKey: "buildTarget") ?? "ios") != "mac-app"
+    }
+
+    nonisolated static func detectDepsSync(needsIOS: Bool = BuildModel.needsIOSPlatform()) -> [Dep] {
         var out: [Dep] = []
 
         // Xcode.app alone is not enough: since Xcode 15 the iOS platform ships as a separate
@@ -2088,17 +2103,15 @@ final class BuildModel: ObservableObject {
         // /Applications/Xcode-beta.app and the hard-coded check called that "no Xcode" (#21).
         let xcodePresent = Self.developerDirExists()
             && FileManager.default.isExecutableFile(atPath: "/usr/bin/xcodebuild")
-        let iosSDK = xcodePresent && runOK("/usr/bin/xcrun", ["--sdk", "iphoneos", "--show-sdk-version"])
+        let iosSDK = xcodePresent && (!needsIOS || runOK("/usr/bin/xcrun", ["--sdk", "iphoneos", "--show-sdk-version"]))
         out.append(Dep(id: "xcode", name: "dep.xcode", hint: "dep.xcode.hint",
                        present: iosSDK,
                        detail: iosSDK ? "" : (xcodePresent ? "dep.xcode.noSDK" : ""),
-                       installCmd: iosSDK ? [] : (xcodePresent
-                            ? ["/usr/bin/xcodebuild", "-downloadPlatform", "iOS"]
-                            : [])))
+                       installCmd: iosSDK ? [] : (xcodePresent ? iosPlatformCmd : [])))
 
         let mt = runOK("/usr/bin/xcrun", ["-sdk", "macosx", "metal", "--version"])
         out.append(Dep(id: "metal", name: "dep.metal", hint: "dep.metal.hint",
-                       present: mt, installCmd: ["xcodebuild", "-downloadComponent", "MetalToolchain"]))
+                       present: mt, installCmd: metalToolchainCmd))
 
         let brew = firstExisting(["/opt/homebrew/bin/brew", "/usr/local/bin/brew"])
         out.append(Dep(id: "brew", name: "dep.brew", hint: "dep.brew.hint", present: brew != nil,
@@ -2237,6 +2250,7 @@ struct BuilderView: View {
     var onOpenSettings: () -> Void = {}
     var onChooseLibraryFolder: () -> Void = {}
     var onOpenControls: () -> Void = {}
+    var onRunSetup: (() -> Void)?   // the guided first-run setup, again (nil where there is none)
     var controlChanges = 0
     @AppStorage(BuildNotice.defaultsKey) private var notifyBuilds = true   // BuildNotifications.swift
     @State private var extrasOpen = false
@@ -2702,6 +2716,13 @@ struct BuilderView: View {
                     .padTarget("set.notify", scope: "main") { notifyBuilds.toggle() }
             }
             divider
+            if let onRunSetup {
+                row(m.t("settings.setup"), detail: m.t("settings.setupNote")) {
+                    Button(m.t("settings.setupBtn"), action: onRunSetup)
+                        .padTarget("set.setup", scope: "main") { onRunSetup() }
+                }
+                divider
+            }
             row("NX2Apple", detail: String(format: m.t("app.version"), BuildModel.appVersion),
                 dot: m.appStaged != nil ? LauncherPalette.ready : nil) {
                 if m.appBusy { ProgressView().controlSize(.small) }
