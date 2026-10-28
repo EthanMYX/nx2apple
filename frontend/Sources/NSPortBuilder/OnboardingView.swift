@@ -126,6 +126,7 @@ import UniformTypeIdentifiers
                 .frame(width: 130, alignment: .trailing)
         }
         .padding(.horizontal, 40).padding(.top, 40).padding(.bottom, 12)
+        .background(TitlebarDoubleClick())   // an empty part of the header acts as the title bar does
     }
 
     private var heading: some View {
