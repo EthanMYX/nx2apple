@@ -376,6 +376,10 @@ def patch_tests_makefile(t):
     # patcher fits the tree before and after the sync that brings the variable.
     CL = r'(?:\$\(CLANG\)|clang)'
     cc = '$(CLANG)' if '$(CLANG)' in t else 'clang'
+    # One spelling per file: a rule upstream added later (t_resolution.c) can carry the other
+    # spelling than the file's own, and the spelling test then fails on the synced result.
+    if cc == '$(CLANG)':
+        t = re.sub(r'(?m)^(\t)clang( -O1\b)', lambda m2: m2.group(1) + cc + m2.group(2), t)
     if 'romfs_arc.c' not in t:
         P = [
             ('t_fs', 'clang -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_fs.c t_fs_stub.c ../hle_bigstack.c\n',
@@ -984,7 +988,13 @@ def patch_main_m(t):
         # the Files-app pick (DataBookmark.m): romfs_locate asks it before anything else
         ('picked data include',
          ('#include "romfs_image.h"\n', '#include "romfs_image.h"\n#include "DataBookmark.h"\n')),
-        ('romfs per-game', MAIN_M_ROMFS),
+        # The sync source carries upstream's identity check in this line (337186cf); the last
+        # sync base has the plain form. Pick the anchor text by which one the file has.
+        ('romfs per-game', (MAIN_M_ROMFS[0] if 'romfs_identity_accepts' in t else
+                            MAIN_M_ROMFS[0].replace(
+                                'if (romfs_image_complete(img) && romfs_identity_accepts(img)) {',
+                                'if (romfs_image_complete(img)) {'),
+                            MAIN_M_ROMFS[1])),
         ('per-game data dirs', MAIN_M_ENV),
     ]
     if 'static int set_data_env' in t: return skip('main.m (already patched)') or t
@@ -1741,7 +1751,8 @@ MARKERS = {
     'dm/ios/tests/test_profile_pack.py': 'slim package',
     'docs/env_switches.tsv': 'DM_FULL_ROMFS\t',
     'dm/mac/launcher.c': '.nx2apple-library',
-    'dm/host/hle_svc.c': 'dm_profile()->mem_reserve',
+    'dm/host/hle_svc.c': ('dm_profile()->mem_reserve',            # the patcher's product on upstream's text
+                          'const struct dm_profile *p = dm_profile();'),   # or the fork's merged rewrite (one dm_profile() call, values from the struct)
     'dm/host/hle_os.c': 'dm_profile()->genv',
     'dm/host/hle_fpslock.c': 'dm_profile()->fps_target',
     'dm/host/loader.c': 'dm_profile()->fps_target',
@@ -2001,8 +2012,13 @@ def apply_changes(a, changes):
         r = patcher(t)
         if r is not None and r != t: p.write_text(r, encoding='utf-8')
         now = p.read_text(encoding='utf-8', errors='replace')
-        if MARKERS[path] not in now:
-            fail(f'{path}: fork patch marker missing after sync: {MARKERS[path]!r}')
+        # A marker is a string the fork's protected form carries and upstream's lacks. A file
+        # can carry two of them: the patcher's product on upstream's text (dm_profile()->…), and
+        # the fork's own merged rewrite of the same behaviour (hle_svc.c keeps the profile in a
+        # struct pointer — same values, one dm_profile() call). Either proves the protection.
+        marks = MARKERS[path] if isinstance(MARKERS[path], tuple) else (MARKERS[path],)
+        if not any(m in now for m in marks):
+            fail(f'{path}: fork patch marker missing after sync: {marks[0]!r}')
 
 
 def game_rows():

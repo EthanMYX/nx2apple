@@ -78,7 +78,8 @@ class PatchersOnUpstream(unittest.TestCase):
                     if out is None: out = text
                     self.assertNotEqual(out, text, f"{path}: the patcher changed nothing on upstream's own file (a marker that "
                                                    f"upstream's text satisfies, or a patch upstream has made itself): the fork's change would be dropped silently")
-                    self.assertIn(su.MARKERS[path], out, f'{path}: the marker is missing from the patched file')
+                    marks = su.MARKERS[path] if isinstance(su.MARKERS[path], tuple) else (su.MARKERS[path],)
+                    self.assertTrue(any(m in out for m in marks), f'{path}: the marker is missing from the patched file')
                     f.write_text(out, encoding='utf-8')
                     again = quiet(patcher, out)
                     self.assertEqual(again if again is not None else out, out, f'{path}: applying the patcher twice changes the file')
@@ -119,7 +120,8 @@ class PatchersOnTheLastBase(unittest.TestCase):
                     out = quiet(patcher, text)
                 except su.SyncProblem as e:
                     self.fail(f'the patcher does not fit the base {base[:7]}: {e}')
-                self.assertIn(su.MARKERS[path], out if out is not None else text)
+                marks = su.MARKERS[path] if isinstance(su.MARKERS[path], tuple) else (su.MARKERS[path],)
+                self.assertTrue(any(m in (out if out is not None else text) for m in marks))
 
     def test_no_fork_edit_is_unprotected(self):
         """A vendored file that differs from the last sync base must be in OURS, PATCHED or DROPPED."""
