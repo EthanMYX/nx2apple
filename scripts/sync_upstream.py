@@ -258,11 +258,22 @@ HLE_FORCE("_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci", "fsp-srv → open(2)", Re
         return RES_OK;
     }
     while (got < sz) {''')]))
+    # The archive handle is asked before the fd: upstream's image-handle branch (IMG_H, romfs.img)
+    # sits between the guard and the fstat now, so the fork's branch lands after whichever of the
+    # two shapes the file carries.
     P.append(('GetFileSize', 'ah->size; return RES_OK', [(
         '''HLE_FORCE("_ZN2nn2fs11GetFileSizeEPlNS0_10FileHandleE", "fsp-srv → fstat(2)", Result, h_fs_GetFileSize, int64_t *out, uint64_t h) {
     if (!h) return RES_FAIL;''',
         '''HLE_FORCE("_ZN2nn2fs11GetFileSizeEPlNS0_10FileHandleE", "fsp-srv → fstat(2)", Result, h_fs_GetFileSize, int64_t *out, uint64_t h) {
     if (!h) return RES_FAIL;
+    archandle *ah; if (arc_get(h, &ah)) { *out = (int64_t)ah->size; return RES_OK; }'''),
+        # upstream 337186cf: an image-handle branch precedes the fstat
+        ('''HLE_FORCE("_ZN2nn2fs11GetFileSizeEPlNS0_10FileHandleE", "fsp-srv → fstat(2)", Result, h_fs_GetFileSize, int64_t *out, uint64_t h) {
+    if (!h) return RES_FAIL;
+    if (IMG_H(h)) { *out = (int64_t)g_mnt[IMG_M(h)].img->e[IMG_K(h)].b; return RES_OK; }''',
+        '''HLE_FORCE("_ZN2nn2fs11GetFileSizeEPlNS0_10FileHandleE", "fsp-srv → fstat(2)", Result, h_fs_GetFileSize, int64_t *out, uint64_t h) {
+    if (!h) return RES_FAIL;
+    if (IMG_H(h)) { *out = (int64_t)g_mnt[IMG_M(h)].img->e[IMG_K(h)].b; return RES_OK; }
     archandle *ah; if (arc_get(h, &ah)) { *out = (int64_t)ah->size; return RES_OK; }''')]))
     P.append(('CloseFile', 'arc_free(h)', [(
         '''HLE_FORCE("_ZN2nn2fs9CloseFileENS0_10FileHandleE", "fsp-srv → close(2)", void, h_fs_CloseFile, uint64_t h) {
