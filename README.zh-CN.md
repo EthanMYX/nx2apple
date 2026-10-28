@@ -374,6 +374,11 @@ DM_FPS_TARGET=30       # 限帧（省电；默认用 profile 的 fps_target）
 DM_OPMODE=0            # 掌机模式：720p 渲染而不是底座的 1080p
 ```
 
+**Mac 上**，启动器的「启动选项」面板有同样的选项（游戏语言、帧率、主机模式等），按游戏保存，重新构建后仍然保留。
+面板里没有的设置，或想固定某项，可以写一个 `env.txt`，格式相同（`DM_LANG=zh-Hans`），放在两处之一：
+`~/Library/Application Support/nxnative/<title ID>/env.txt` 优先，重新构建后仍在；
+`<App>.app/Contents/Resources/dm/env.txt` 是 App 自带的。在加入语言选项之前构建的 App 需要重新构建一次才有该项。
+
 **存档和日志**在「文件」App 里该 App 名字下：`save/` 和 `log.txt`。出问题时把 `log.txt`
 发出来（上一次运行的是 `log.prev.txt`）。新场景第一次出现时短促卡顿是正常的：App 会为它
 编译一次图形并记住。
