@@ -9,6 +9,7 @@ Game problems, build problems and launcher problems each have an issue form (`.g
 ## Where an issue goes
 
 - **Here:** the app, a build or install that fails, and a game that does not run well on your Mac or iPhone or iPad.
+- **[Discussions](https://github.com/LNPANDY/NX2Apple/discussions):** questions (Q&A) and ideas (Ideas); bugs stay issues.
 - **[seedds/nxnative](https://github.com/seedds/nxnative/issues):** how the engine works, porting a new game, a rendering fault you have traced into the engine itself.
 
 ## What a report needs
