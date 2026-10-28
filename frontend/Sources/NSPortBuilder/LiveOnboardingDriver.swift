@@ -3,6 +3,8 @@ import Combine
 
 /// UserDefaults keys of the guided setup. `platform` is also read by `BuildModel.needsIOSPlatform`.
 enum OnboardingDefaults {
+    /// An NSPB_ONBOARDING_FORCE run's platform choice, in memory only (nothing is stored until it finishes).
+    static var sessionPlatform: String?
     static let completed = "onboarding.completed"
     static let step = "onboarding.step"
     static let platform = "onboarding.platform"
@@ -165,7 +167,9 @@ enum OnboardingLaunch {
     /// Setup counts as complete when the tools are all present, a keys file is known and a games folder is set. A player
     /// who has built a game already has all three in effect.
     static func setupComplete(depsPresent: Bool, keysKnown: Bool, gamesKnown: Bool) -> Bool { depsPresent && keysKnown && gamesKnown }
-    static func shouldShow(completed: Bool, setupComplete: Bool) -> Bool { !completed && !setupComplete }
+    /// `force` (NSPB_ONBOARDING_FORCE=1) shows it whatever the state.
+    static func shouldShow(completed: Bool, setupComplete: Bool, force: Bool = false) -> Bool { force || (!completed && !setupComplete) }
+    static func forced(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool { environment["NSPB_ONBOARDING_FORCE"] == "1" }
 }
 
 /// The real driver: the guided setup over the launcher's own `BuildModel` (detection and installs) and `GameLibrary`.
@@ -194,13 +198,40 @@ enum OnboardingLaunch {
     private var suppressAdvance = false
     private var tasks: [String: Task<Void, Never>] = [:]
     private var subscription: AnyCancellable?
+    private let ephemeral: Bool
+    private var installApproved: Bool       // background installs may start (always, except in an ephemeral run before an install action)
+    private var pending: [String: Any] = [:]   // an ephemeral run's preference writes, applied by `flush`
+    private var pendingTarget: String?
+
+    /// A preference write; an ephemeral run holds it back.
+    private func store(_ value: Any?, _ key: String) {
+        if ephemeral { pending[key] = value ?? NSNull(); return }
+        if let value { env.defaults.set(value, forKey: key) } else { env.defaults.removeObject(forKey: key) }
+    }
+
+    /// The held-back writes, once the player finishes or sets up later.
+    private func flush() {
+        guard ephemeral else { return }
+        for (key, value) in pending { if value is NSNull { env.defaults.removeObject(forKey: key) } else { env.defaults.set(value, forKey: key) } }
+        pending.removeAll()
+        OnboardingDefaults.sessionPlatform = nil
+        if let target = pendingTarget { model.target = target; pendingTarget = nil }
+    }
 
     private func t(_ key: String) -> String { L10n.string(key, model.lang) }
 
     /// `fresh` ignores a stored step (Run setup again); otherwise a stored, unfinished run resumes where it stopped.
-    init(model: BuildModel, library: GameLibrary, env: OnboardingEnvironment = OnboardingEnvironment(), fresh: Bool = false) {
-        self.model = model; self.library = library; self.env = env
+    /// `ephemeral` (NSPB_ONBOARDING_FORCE) starts from Welcome, keeps every preference write in memory until the player finishes
+    /// or picks Set up later, and installs nothing until an install action is pressed, so a test leaves no trace.
+    init(model: BuildModel, library: GameLibrary, env: OnboardingEnvironment = OnboardingEnvironment(), fresh: Bool = false,
+         ephemeral: Bool = false) {
+        self.model = model; self.library = library; self.env = env; self.ephemeral = ephemeral
+        installApproved = !ephemeral
         let d = env.defaults
+        if ephemeral {
+            updateWelcome()
+            return
+        }
         if fresh {
             d.removeObject(forKey: OnboardingDefaults.step); d.removeObject(forKey: OnboardingDefaults.platform)
             d.set(false, forKey: OnboardingDefaults.inProgress)
@@ -234,19 +265,17 @@ enum OnboardingLaunch {
 
     func start() {
         guard state.step == .welcome, state.exit == nil else { return }
-        env.defaults.set(true, forKey: OnboardingDefaults.inProgress)
+        store(true, OnboardingDefaults.inProgress)
         next()
     }
 
     func choosePlatform(_ platform: OnboardingPlatform) {
         guard state.step == .platform, state.exit == nil else { return }
         state.platform = .selected(platform)
-        env.defaults.set(platform.rawValue, forKey: OnboardingDefaults.platform)   // before the detection below reads it
-        switch platform {   // the Builds page's target follows the choice; "both" leaves it as it is
-        case .mac: model.target = "mac-app"
-        case .iphone: model.target = "ios"
-        case .both: break
-        }
+        store(platform.rawValue, OnboardingDefaults.platform)   // before the detection below reads it
+        if ephemeral { OnboardingDefaults.sessionPlatform = platform.rawValue }   // the detection reads it from here
+        let target: String? = platform == .mac ? "mac-app" : (platform == .iphone ? "ios" : nil)   // "both" leaves the target as it is
+        if let target { if ephemeral { pendingTarget = target } else { model.target = target } }
         updateWelcome()
         backgroundStarted = true
         spawn("platform") { d in
@@ -257,6 +286,7 @@ enum OnboardingLaunch {
 
     func getXcode() {
         guard state.step == .xcode, state.xcode == .missing, state.exit == nil else { return }
+        installApproved = true
         waitingForXcode = true
         state.xcode = .downloading
         env.openURL(URL(string: "macappstore://apps.apple.com/app/id497799835")!)
@@ -265,6 +295,7 @@ enum OnboardingLaunch {
 
     func finishXcodeSetup() {
         guard state.step == .xcode, state.xcode == .needsSetup, state.exit == nil else { return }
+        installApproved = true
         state.xcode = .settingUp
         xcodeBusy = true
         spawn("finish") { d in await d.runFinishXcode() }
@@ -274,6 +305,7 @@ enum OnboardingLaunch {
         guard state.step == step, state.exit == nil else { return }
         switch step {
         case .xcode:
+            installApproved = true
             failedDeps.removeAll()
             if case .failed = state.xcode { state.xcode = .needsSetup }
             xcodeBusy = false
@@ -319,15 +351,17 @@ enum OnboardingLaunch {
     func skipForLater() {
         guard state.exit == nil else { return }
         persistStep()
-        env.defaults.set(true, forKey: OnboardingDefaults.inProgress)
+        store(true, OnboardingDefaults.inProgress)
+        flush()
         close(.later)
     }
 
     func openLibrary() {
         guard state.step == .done, state.primaryEnabled else { return }
-        env.defaults.set(true, forKey: OnboardingDefaults.completed)
-        env.defaults.set(false, forKey: OnboardingDefaults.inProgress)
-        env.defaults.removeObject(forKey: OnboardingDefaults.step)
+        store(true, OnboardingDefaults.completed)
+        store(false, OnboardingDefaults.inProgress)
+        store(nil, OnboardingDefaults.step)
+        flush()
         if library.selectedID == nil { library.selectedID = library.games.first?.id }
         close(.library)
     }
@@ -346,7 +380,7 @@ enum OnboardingLaunch {
         for _ in 0..<6 { for task in Array(tasks.values) { await task.value } }
     }
 
-    private func persistStep() { env.defaults.set(state.step.rawValue, forKey: OnboardingDefaults.step) }
+    private func persistStep() { store(state.step.rawValue, OnboardingDefaults.step) }
 
     private func spawn(_ name: String, _ body: @escaping (LiveOnboardingDriver) async -> Void) {
         tasks[name]?.cancel()
@@ -553,7 +587,7 @@ enum OnboardingLaunch {
     /// One install at a time, in the order Python, .NET, tools. Homebrew and its formulas need Xcode's command line tools,
     /// so they wait for Xcode to be ready; the other two start at once.
     func pumpInstalls() {
-        guard backgroundStarted, model.depsChecked, currentInstall == nil, state.exit == nil else { return }
+        guard installApproved, backgroundStarted, model.depsChecked, currentInstall == nil, state.exit == nil else { return }
         for task in OnboardingBackgroundTask.allCases {
             if task == .tools && state.xcode != .ready { continue }
             guard let next = deps(for: task).first(where: { !$0.present && failedDeps[$0.id] == nil && !$0.installing }) else { continue }

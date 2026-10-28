@@ -34,6 +34,8 @@ struct RootView: View {
     /// anything else starts or resumes the guided setup.
     private func decide() async {
         let defaults = UserDefaults.standard
+        // NSPB_ONBOARDING_FORCE=1: the real flow with real detection whatever the state, leaving no trace until it is finished
+        if OnboardingLaunch.forced() { show(fresh: false, ephemeral: true); return }
         if defaults.bool(forKey: OnboardingDefaults.completed) { mode = .launcher; return }
         await model.refreshDepsAndWait()
         let env = OnboardingEnvironment()
@@ -48,8 +50,8 @@ struct RootView: View {
         }
     }
 
-    private func show(fresh: Bool) {
-        let d = LiveOnboardingDriver(model: model, library: library, fresh: fresh)
+    private func show(fresh: Bool, ephemeral: Bool = false) {
+        let d = LiveOnboardingDriver(model: model, library: library, fresh: fresh, ephemeral: ephemeral)
         d.onExit = { _ in mode = .launcher; driver = nil }
         driver = d
         mode = .onboarding

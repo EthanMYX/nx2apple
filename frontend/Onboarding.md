@@ -21,6 +21,8 @@ NSPB_ONBOARDING_DEMO=noGames swift run
 
 Set up later preserves an in-memory snapshot; Resume setup restores it. The mock persists nothing; the real driver does (below).
 
+`NSPB_ONBOARDING_FORCE=1 swift run` shows the real flow (the live driver, real detection) on launch even when setup is complete or marked done. It writes nothing until the player finishes or picks "Set up later": no `onboarding.completed`, step, platform or build target, and nothing is installed until an install action (Get Xcode, Finish setup, Retry) is pressed. Quitting in between leaves no trace.
+
 ## Wiring contract
 
 `OnboardingView<Driver: OnboardingDriver>` observes a driver on the main actor. A real `ObservableObject` should publish `OnboardingState` as one value and implement these intents:

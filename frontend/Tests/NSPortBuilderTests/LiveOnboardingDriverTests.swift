@@ -25,6 +25,7 @@ import XCTest
     var home: URL!
 
     override func setUp() {
+        OnboardingDefaults.sessionPlatform = nil
         let target = UserDefaults.standard.object(forKey: "buildTarget")   // choosePlatform sets the Builds page's target
         addTeardownBlock { UserDefaults.standard.set(target, forKey: "buildTarget") }
         let suite = "onboarding.tests." + UUID().uuidString
@@ -127,6 +128,43 @@ import XCTest
         for missing in 0..<3 {
             XCTAssertFalse(OnboardingLaunch.setupComplete(depsPresent: missing != 0, keysKnown: missing != 1, gamesKnown: missing != 2))
         }
+    }
+
+    func testForceShowsTheSetupWhateverTheState() {
+        XCTAssertTrue(OnboardingLaunch.shouldShow(completed: true, setupComplete: true, force: true))
+        XCTAssertFalse(OnboardingLaunch.shouldShow(completed: true, setupComplete: true, force: false))
+        XCTAssertTrue(OnboardingLaunch.forced(["NSPB_ONBOARDING_FORCE": "1"]))
+        XCTAssertFalse(OnboardingLaunch.forced(["NSPB_ONBOARDING_FORCE": "0"]))
+        XCTAssertFalse(OnboardingLaunch.forced([:]))
+    }
+
+    func testForcedRunLeavesNoTraceInstallsNothingUntilAskedAndFlushesOnLater() async {
+        let fake = Fake()
+        defaults.set(true, forKey: OnboardingDefaults.completed)
+        let (live, model) = make(fake, deps: [dep("xcode", present: true), dep("metal", present: true), dep("python", present: false)])
+        _ = live
+        var env = OnboardingEnvironment(); env.defaults = defaults; env.home = home.path
+        env.freeBytes = { 100_000_000_000 }; env.xcodeProbe = { fake.probe }; env.xcodeInstalled = { true }; env.xcodeFolderExists = { true }
+        env.detectDeps = { _ in }; env.installDep = { _, d in fake.installed.append(d.id) }
+        env.advanceDelay = 0
+        let driver = LiveOnboardingDriver(model: model, library: GameLibrary(file: home.appendingPathComponent("l.json")), env: env, ephemeral: true)
+        XCTAssertEqual(driver.state.step, .welcome, "a forced run starts from Welcome whatever is stored")
+        driver.start(); driver.choosePlatform(.mac)
+        driver.next()
+        driver.activate()
+        await driver.settle()
+        XCTAssertTrue(fake.installed.isEmpty, "nothing installs before an install action")
+        XCTAssertNil(defaults.string(forKey: OnboardingDefaults.step))
+        XCTAssertNil(defaults.string(forKey: OnboardingDefaults.platform))
+        XCTAssertFalse(defaults.bool(forKey: OnboardingDefaults.inProgress))
+        XCTAssertTrue(BuildModel.needsIOSPlatform(defaults: defaults) == false, "the session's Mac-only choice is in effect")
+        driver.retry(.xcode)
+        await driver.settle()
+        XCTAssertEqual(fake.installed, ["python"])
+        driver.skipForLater()
+        XCTAssertEqual(defaults.string(forKey: OnboardingDefaults.platform), "mac", "Set up later stores it")
+        XCTAssertEqual(defaults.string(forKey: OnboardingDefaults.step), "xcode")
+        XCTAssertNil(OnboardingDefaults.sessionPlatform)
     }
 
     // MARK: The driver

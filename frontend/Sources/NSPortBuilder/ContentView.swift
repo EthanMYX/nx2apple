@@ -2089,6 +2089,7 @@ final class BuildModel: ObservableObject {
     /// Whether the xcode row asks for the iOS SDK. Always, as before, unless the guided setup stored a Mac-only choice
     /// and builds are for the Mac: upstream no longer needs the iOS SDK for a Mac build (c464cb24).
     nonisolated static func needsIOSPlatform(defaults: UserDefaults = .standard) -> Bool {
+        if OnboardingDefaults.sessionPlatform == "mac" { return false }   // a forced run's choice, not stored yet
         guard defaults.string(forKey: OnboardingDefaults.platform) == "mac" else { return true }
         return (defaults.string(forKey: "buildTarget") ?? "ios") != "mac-app"
     }
