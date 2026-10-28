@@ -28,18 +28,6 @@ final class BrewfileTests: XCTestCase {
         XCTAssertEqual(try entries("brew").count, launcher.count, "a formula is listed twice")
     }
 
-    func testGlslangIsAnOptionalRowThatDoesNotBlockBuilding() throws {
-        let rows = BuildModel.brewDeps.filter { !$0.required }
-        XCTAssertEqual(rows.map { $0.formula }, ["glslang"])
-        for r in rows { XCTAssertNotNil(L10n.table[r.key]); XCTAssertNotNil(L10n.table[r.key + ".hint"]) }
-        let model = BuildModel()
-        model.depsChecked = true
-        model.deps = [BuildModel.Dep(id: "g", name: "dep.glslang", hint: "dep.glslang.hint", present: false, required: false, installCmd: [])]
-        XCTAssertTrue(model.allDepsPresent)
-        model.deps.append(BuildModel.Dep(id: "z", name: "dep.zstd", hint: "", present: false, installCmd: []))
-        XCTAssertFalse(model.allDepsPresent)
-    }
-
     func testBrewfileCaskIsTheDotnetSdkTheLauncherNeeds() throws {
         // The launcher checks for an SDK (`dotnet --list-sdks`) and installs channel 10.0; the cask is Homebrew's SDK.
         XCTAssertEqual(try entries("cask"), ["dotnet-sdk"])

@@ -3,5 +3,5 @@
 brew "xcodegen"      # generates the Xcode project
 brew "zstd"          # decompression
 brew "spirv-cross"   # shader translation
-brew "glslang"       # only for OpenGL (LÖVE) games
+brew "glslang"       # glslangValidator: the NSP script checks for it before every build
 cask "dotnet-sdk"    # the .NET SDK (10) the extractor and the shader translator run on
