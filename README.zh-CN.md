@@ -261,9 +261,10 @@ Homebrew 工具和 Python 包，然后打 IPA。
 ```bash
 git clone https://github.com/<you>/NX2Apple.git
 cd NX2Apple
-brew install xcodegen zstd spirv-cross glslang   # glslang: OpenGL (LÖVE) games only
-brew install --cask dotnet-sdk
-python3 -m pip install lz4 capstone fonttools backports.zstd
+brew bundle --file=Brewfile                       # xcodegen, zstd, spirv-cross, glslang（打包脚本会检查它）, .NET SDK
+python3 -m venv .venv                             # Homebrew 的 Python 不允许全局 pip 安装（PEP 668）
+.venv/bin/python -m pip install lz4 capstone fonttools nsz "backports.zstd; python_version < '3.14'"
+source .venv/bin/activate                         # 之后的 python3 即 venv 的（每个新终端都要执行）
 ```
 
 `backports.zstd` 是《王国之泪》的 zstd 字典需要的；其他游戏用不到。
