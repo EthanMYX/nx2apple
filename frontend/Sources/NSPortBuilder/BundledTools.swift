@@ -36,12 +36,20 @@ enum BundledTools {
         return url.path
     }
 
-    /// A PATH for the processes that run the build: the bundled tools first, then the bundled Python's folder (so that a script that
-    /// starts `python3` by name gets this one and not the system's 3.9), then `base`. `base` unchanged when there is no bundle.
-    nonisolated static func path(_ base: String, in resources: URL? = resources) -> String {
+    /// Environment variables for a process that runs `python` (empty unless it is the bundled interpreter): no user site, so that
+    /// packages in ~/Library/Python or ~/.local cannot shadow the pinned ones, and no .pyc, which would be written into the signed app.
+    nonisolated static func environment(for python: String, in resources: URL? = resources) -> [String: String] {
+        guard let bundled = Self.python(in: resources), bundled == python else { return [:] }
+        return ["PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1"]
+    }
+
+    /// A PATH for the processes that run the build: the bundled tools first, then the folder of the interpreter the build uses when it
+    /// is the bundled one (so that a script that starts `python3` by name gets this one and not the system's 3.9; a bundled Python that
+    /// was rejected, or a different one chosen, stays off the PATH), then `base`. `base` unchanged when there is no bundle.
+    nonisolated static func path(_ base: String, python: String?, in resources: URL? = resources) -> String {
         var dirs: [String] = []
         if let bin = binDirectory(in: resources) { dirs.append(bin) }
-        if let py = python(in: resources) { dirs.append((py as NSString).deletingLastPathComponent) }
+        if let py = python, py == Self.python(in: resources) { dirs.append((py as NSString).deletingLastPathComponent) }
         return (dirs + [base]).joined(separator: ":")
     }
 }

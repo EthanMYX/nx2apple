@@ -60,20 +60,38 @@ final class BundledToolsTests: XCTestCase {
     // ---- PATH ----
 
     func testPathWithoutBundleIsTheBaseUnchanged() {
-        XCTAssertEqual(BundledTools.path("/usr/bin:/bin", in: nil), "/usr/bin:/bin")
-        XCTAssertEqual(BundledTools.path("/usr/bin:/bin", in: root), "/usr/bin:/bin")
+        XCTAssertEqual(BundledTools.path("/usr/bin:/bin", python: nil, in: nil), "/usr/bin:/bin")
+        XCTAssertEqual(BundledTools.path("/usr/bin:/bin", python: nil, in: root), "/usr/bin:/bin")
     }
 
     func testPathPutsTheBundledToolsFirstThenItsPython() throws {
         try install("tools/bin/zstd")
-        try install("python/bin/python3")
-        XCTAssertEqual(BundledTools.path("/opt/homebrew/bin:/usr/bin", in: root),
+        let py = try install("python/bin/python3")
+        XCTAssertEqual(BundledTools.path("/opt/homebrew/bin:/usr/bin", python: py, in: root),
                        root.path + "/tools/bin:" + root.path + "/python/bin:/opt/homebrew/bin:/usr/bin")
+    }
+
+    func testPathKeepsARejectedOrOtherPythonOff() throws {
+        // review of #154: the bundled interpreter that findPython rejected must not lead the PATH, nor must it when another was chosen
+        try install("tools/bin/zstd")
+        try install("python/bin/python3")
+        let expected = root.path + "/tools/bin:/usr/bin"
+        XCTAssertEqual(BundledTools.path("/usr/bin", python: "/opt/homebrew/bin/python3", in: root), expected)
+        XCTAssertEqual(BundledTools.path("/usr/bin", python: nil, in: root), expected)
+    }
+
+    func testOnlyTheBundledPythonGetsTheIsolatedEnvironment() throws {
+        let py = try install("python/bin/python3")
+        let env = BundledTools.environment(for: py, in: root)
+        XCTAssertEqual(env["PYTHONNOUSERSITE"], "1")
+        XCTAssertEqual(env["PYTHONDONTWRITEBYTECODE"], "1")
+        XCTAssertTrue(BundledTools.environment(for: "/opt/homebrew/bin/python3", in: root).isEmpty)
+        XCTAssertTrue(BundledTools.environment(for: py, in: nil).isEmpty)
     }
 
     func testPathWithToolsButNoPython() throws {
         try install("tools/bin/zstd")
-        XCTAssertEqual(BundledTools.path("/usr/bin", in: root), root.path + "/tools/bin:/usr/bin")
+        XCTAssertEqual(BundledTools.path("/usr/bin", python: nil, in: root), root.path + "/tools/bin:/usr/bin")
     }
 
     func testBuildToolPathKeepsTheHomebrewBaseWithoutABundle() {

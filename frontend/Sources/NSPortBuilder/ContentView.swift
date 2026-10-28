@@ -366,8 +366,8 @@ final class BuildModel: ObservableObject {
 
     /// The PATH of the processes that run the build, installing packages and writing the RomFS image: the bundled tools in front of
     /// `base` (BundledTools.swift), which is Homebrew's folders and the system's. One place, so that no environment forgets the bundle.
-    nonisolated static func toolPath(_ base: String = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin") -> String {
-        BundledTools.path(base)
+    nonisolated static func toolPath(_ base: String = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin", python: String? = nil) -> String {
+        BundledTools.path(base, python: python)
     }
 
     /// Run a command with all output captured (no streaming; fetch / rev-list / pull print little).
@@ -1106,8 +1106,8 @@ final class BuildModel: ObservableObject {
         if compressed, !Self.runOK(py, ["-c", "import nsz"]) {
             say(t("msg.installingNsz"))
             let r = Self.runCaptured([py, "-m", "pip", "install", "nsz"],
-                                     env: ["PATH": Self.toolPath(),
-                                           "HOME": NSHomeDirectory()]) { line in
+                                     env: ["PATH": Self.toolPath(python: py),
+                                           "HOME": NSHomeDirectory()].merging(BundledTools.environment(for: py)) { $1 }) { line in
                 DispatchQueue.main.async { self.append(line + "\n") }
             }
             if !r {
@@ -1162,7 +1162,7 @@ final class BuildModel: ObservableObject {
         // (NuGet-Migrations) under $TMPDIR/.dotnet/shm, and with no TMPDIR it stats "" and dies with
         // 'NuGet-Migrations' + lstat("") == ENOENT before any project is read. NSTemporaryDirectory()
         // is the per-user temp folder whether or not the app's own environment carries one.
-        var denv: [String: String] = ["PATH": Self.toolPath("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"),
+        var denv: [String: String] = ["PATH": Self.toolPath("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", python: py),
                                       "USER": NSUserName(), "HOME": NSHomeDirectory(), "LANG": "en_US.UTF-8",
                                       "TMPDIR": NSTemporaryDirectory()]
         if let droot = Self.dotnetRoot(for: dotnetPath.isEmpty ? "dotnet" : dotnetPath) {
@@ -1170,8 +1170,8 @@ final class BuildModel: ObservableObject {
             denv["DOTNET_ROOT_ARM64"] = droot
         }
         // The bundled Python lives inside the signed app: a .pyc written there would change what the signature seals
-        // (the packages are compiled at bundle time).
-        if py == BundledTools.python() { denv["PYTHONDONTWRITEBYTECODE"] = "1" }
+        // (the packages are compiled at bundle time), and a user site must not shadow its pinned packages.
+        denv.merge(BundledTools.environment(for: py)) { $1 }
         p.environment = denv
         Self.inOwnGroup(p, python: py)
         let pipe = Pipe()
@@ -1604,7 +1604,9 @@ final class BuildModel: ObservableObject {
         p.executableURL = URL(fileURLWithPath: pythonPath.isEmpty ? "/usr/bin/python3" : pythonPath)
         // dest/romfs.img: one file, which main.m's per-game lookup takes before any folder.
         p.arguments = [repoPath + "/" + Self.romfsImageTool, "--reuse", romfs, dest + "/romfs.img"]
-        p.environment = ["PATH": Self.toolPath("/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"), "PYTHONPATH": repoPath + "/dm/tools"]
+        let romfsPy = p.executableURL!.path
+        p.environment = ["PATH": Self.toolPath("/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", python: romfsPy), "PYTHONPATH": repoPath + "/dm/tools"]
+            .merging(BundledTools.environment(for: romfsPy)) { $1 }
         Self.inOwnGroup(p, python: p.executableURL!.path)
         let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
         pipe.fileHandleForReading.readabilityHandler = { [weak self] h in
@@ -1947,7 +1949,9 @@ final class BuildModel: ObservableObject {
 
     nonisolated static func venvPython() -> String { venvDir + "/bin/python3" }
 
-    nonisolated static func importsOK(_ py: String) -> Bool { runOK(py, ["-c", importProbe]) }
+    nonisolated static func importsOK(_ py: String) -> Bool {
+        runOK(py, ["-c", importProbe], env: ProcessInfo.processInfo.environment.merging(BundledTools.environment(for: py)) { $1 })
+    }
 
     /// backports.zstd declares Python < 3.14, so it is only installed where it is needed.
     /// nsz is always installed: NSZ / XCZ dumps are accepted by the pipeline now, and a player who
@@ -1966,7 +1970,7 @@ final class BuildModel: ObservableObject {
             let p = Process(); p.executableURL = URL(fileURLWithPath: exe); p.arguments = args
             let out = Pipe(), err = Pipe()
             p.standardOutput = out; p.standardError = err; p.standardInput = FileHandle.nullDevice
-            p.environment = ["PATH": toolPath(), "HOME": NSHomeDirectory()]
+            p.environment = ["PATH": toolPath(python: base), "HOME": NSHomeDirectory()].merging(BundledTools.environment(for: base)) { $1 }
             do { try p.run() } catch { log += "could not start \(exe): \(error.localizedDescription)\n"; return false }
             // both pipes are drained on this thread (before waitUntilExit, so the child cannot
             // block on a full pipe), and the log string keeps a single owner
@@ -1994,6 +1998,7 @@ final class BuildModel: ObservableObject {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: path)
         p.arguments = ["-c", "import sys; print('%d.%d' % sys.version_info[:2])"]
+        p.environment = ProcessInfo.processInfo.environment.merging(BundledTools.environment(for: path)) { $1 }
         let pipe = Pipe()
         p.standardOutput = pipe; p.standardError = Pipe()
         p.standardInput = FileHandle.nullDevice
