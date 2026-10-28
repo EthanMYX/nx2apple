@@ -7,12 +7,15 @@ issue, edits one, removes a label or touches code.
   schema      exactly {"labels": [str], "comment": str, "duplicates": [int]}
   labels      each from ALLOWED_LABELS, no repeats, at most 4; labels the repository does not have are skipped (never created)
   duplicates  at most 3 issue numbers, each a candidate that triage_prepare.py found, not the issue itself, and existing in this repository
+  mode        TRIAGE_MODE: `post` posts the comment; `report` (default, also for any other value) only adds labels and writes the comment
+              to the job summary and triage-<issue>.md
   comment     at most 1500 characters; no @-mention, no HTML, no images; links only into github.com/LNPANDY/NX2Apple and
               github.com/seedds/nxnative (the README is the first), judged on the normalised path; Markdown reference definitions, `//host`
               and dotted words that are not file names are rejected; an issue number may only be the issue itself or a gathered candidate
 """
 import argparse
 import json
+import os
 import re
 import urllib.parse
 import subprocess
@@ -24,10 +27,11 @@ MAX_LABELS = 4
 MAX_DUPLICATES = 3
 MAX_COMMENT = 1500
 MAX_RAW = 20000
+MODES = ('report', 'post')
 MARKER = '<!-- nx2apple-triage -->'
 FOOTER = '_Automated first look (AI-assisted, from the issue form and the log). A maintainer will follow up._'
 
-ALLOWED_REPOS = {('lnpandy', 'nx2apple'), ('seedds', 'nxnative')}
+ALLOWED_REPOS = {('lnpandy', 'nx2apple'), ('seedds', 'nxnative')}   # any path inside them is allowed, e.g. /discussions and /discussions/categories/q-a
 # Anything that can become a link: a scheme, `www.`, a protocol-relative `//host`. Bare domains are found separately.
 ANY_URL = re.compile(r'(?:[a-z][a-z0-9+.-]*://|www\.|mailto:|javascript:|data:)\S*', re.I)
 BARE_GITHUB = re.compile(r'(?<![\w./-])github\.com/\S*', re.I)
@@ -171,6 +175,20 @@ def build_comment(comment, dups):
     return '\n\n'.join(parts + [FOOTER, MARKER])
 
 
+def resolve_mode(value):
+    """`post` only for exactly "post" (a trailing newline or spaces are tolerated); anything else, unset or misspelled, is `report`."""
+    return 'post' if isinstance(value, str) and value.strip() == 'post' else 'report'
+
+
+def report_text(issue, repo, labels, dups, body):
+    """The Markdown of a report-mode run: what was labelled and the comment that would have been posted, as a quoted block."""
+    quoted = '\n'.join('> ' + ln if ln else '>' for ln in body.splitlines()) if body else '> _(no comment)_'
+    return (f'## Triage of [#{issue}](https://github.com/{repo}/issues/{issue}) (report mode: nothing posted)\n\n'
+            f'Labels added: {", ".join(labels) if labels else "none"}\n\n'
+            f'Duplicates: {", ".join(f"#{n}" for n in dups) if dups else "none"}\n\n'
+            f'Comment it would post:\n\n{quoted}\n')
+
+
 def gh(*args, check=True):
     r = subprocess.run(['gh', *args], capture_output=True, text=True, timeout=60)
     if check and r.returncode:
@@ -185,6 +203,8 @@ def main(argv=None):
     ap.add_argument('--input', required=True, help='input.json of triage_prepare.py')
     ap.add_argument('--result', required=True, help="the model's output")
     ap.add_argument('--dry-run', action='store_true')
+    ap.add_argument('--mode', default=os.environ.get('TRIAGE_MODE', ''), help='report (default) or post; anything else is report')
+    ap.add_argument('--report-dir', default='.', help='report mode: where triage-<issue>.md is written')
     a = ap.parse_args(argv)
 
     data = json.loads(Path(a.input).read_text(encoding='utf-8'))
@@ -203,10 +223,20 @@ def main(argv=None):
         if l not in have:
             print(f'::notice::label {l!r} does not exist in {a.repo}, skipped')
     print(f'labels: {use}\nduplicates: {dups}\ncomment:\n{body}')
+    mode = resolve_mode(a.mode)
+    print(f'mode: {mode}')
     if a.dry_run:
         return 0
     if use:
         gh('issue', 'edit', str(a.issue), '-R', a.repo, '--add-label', ','.join(use))
+    if mode == 'report':   # labels are internal; the comment goes to the job summary and an artifact, never to the issue
+        text = report_text(a.issue, a.repo, use, dups, body)
+        Path(a.report_dir, f'triage-{a.issue}.md').write_text(text, encoding='utf-8')
+        summary = os.environ.get('GITHUB_STEP_SUMMARY')
+        if summary:
+            with open(summary, 'a', encoding='utf-8') as f:
+                f.write(text + '\n')
+        return 0
     if body:
         old = gh('api', f'repos/{a.repo}/issues/{a.issue}/comments', '--paginate', '--jq',
                  '.[] | select(.user.type == "Bot" and (.body | contains("%s"))) | .id' % MARKER).stdout.split()

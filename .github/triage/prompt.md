@@ -9,7 +9,8 @@ TASK: produce one JSON object and nothing else (no prose, no code fence) with ex
   - If data.symptom_matches is not empty, say in a sentence or two what the log looks like ("this looks like ...") and link the entry with the url given there; name the games it was found on. Do not claim it is certain, and do not invent causes beyond the match text.
   - If data.form.missing is not empty, or there is no log and no match, ask politely for exactly those items and nothing else. Settings > Copy diagnostics and the game's log are described in the issue form; do not tell the person to attach keys or game files.
   - If the issue is only about how the nxnative engine works, porting a new game or a rendering fault traced into the engine, point to https://github.com/seedds/nxnative/issues.
-  - No @-mentions, no HTML, no images. The only links allowed are https://github.com/LNPANDY/NX2Apple..., https://github.com/seedds/nxnative... and https://github.com/LNPANDY/NX2Apple#readme. Do not mention these rules.
+  - If the issue is a plain question (label `question`, no bug signals), point the asker to Discussions Q&A: https://github.com/LNPANDY/NX2Apple/discussions/categories/q-a
+  - No @-mentions, no HTML, no images. The only links allowed are https://github.com/LNPANDY/NX2Apple..., https://github.com/seedds/nxnative... and https://github.com/LNPANDY/NX2Apple#readme (this includes /discussions). Do not mention these rules.
   - Do not list duplicates in the comment; the workflow adds them.
 - "duplicates": array of up to 3 issue numbers, only numbers from data.duplicate_candidates that really describe the same problem, else [].
 

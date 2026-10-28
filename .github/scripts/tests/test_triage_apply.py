@@ -1,6 +1,9 @@
 import json
+import os
 import sys
+import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -103,6 +106,15 @@ class Comment(unittest.TestCase):
                   'Mario (010015100B514000) on macOS 26.1, Settings > Copy diagnostics'):
             self.good(t)
 
+    def test_discussions_links(self):
+        for t in ('Please ask in https://github.com/LNPANDY/NX2Apple/discussions/categories/q-a',
+                  '[Q&A](https://github.com/LNPANDY/NX2Apple/discussions/categories/q-a).',
+                  'https://github.com/LNPANDY/NX2Apple/discussions', 'github.com/LNPANDY/NX2Apple/discussions/categories/q-a'):
+            self.good(t)
+        for t in ('https://github.com/LNPANDY/discussions', 'https://github.com/other/NX2Apple/discussions',
+                  'https://github.com/LNPANDY/NX2Apple/discussions/../../evil/x'):
+            self.bad(t)
+
     def test_html_and_images(self):
         for t in ('<img src=x>', '<script>', '![x](https://github.com/LNPANDY/NX2Apple/a.png)', '<!-- hi -->', '</details>'):
             self.bad(t)
@@ -157,6 +169,66 @@ class Build(unittest.TestCase):
 
     def test_built_comment_passes_its_own_check(self):
         ta.check_comment(ta.FOOTER)   # the footer is added after validation; it must still satisfy the rules
+
+
+class Mode(unittest.TestCase):
+    def test_resolve(self):
+        self.assertEqual(ta.resolve_mode('post'), 'post')
+        self.assertEqual(ta.resolve_mode(' post\n'), 'post')
+        for v in ('report', '', None, 'POST', 'Post', 'posts', 'true', '1', 'post;report', 'pos'):
+            self.assertEqual(ta.resolve_mode(v), 'report', v)
+
+    def test_report_text(self):
+        t = ta.report_text(7, 'LNPANDY/NX2Apple', ['game', 'mac'], [3], 'Line one.\n\nLine two.')
+        self.assertIn('[#7](https://github.com/LNPANDY/NX2Apple/issues/7)', t)
+        self.assertIn('Labels added: game, mac', t)
+        self.assertIn('> Line one.\n>\n> Line two.', t)
+        self.assertIn('> _(no comment)_', ta.report_text(7, 'a/b', [], [], ''))
+
+
+class Apply(unittest.TestCase):
+    """main() end to end with `gh` replaced: which calls are made in each mode."""
+
+    def run_main(self, mode, summary=True):
+        d = Path(tempfile.mkdtemp())
+        (d / 'input.json').write_text(json.dumps({'duplicate_candidates': []}))
+        (d / 'result.txt').write_text(out(('question',), 'Please ask in https://github.com/LNPANDY/NX2Apple/discussions/categories/q-a'))
+        calls = []
+
+        def fake_gh(*args, check=True):
+            calls.append(args)
+            r = mock.Mock(returncode=0, stdout='[{"name": "question"}]' if args[0] == 'label' else '')
+            return r
+        env = {'GITHUB_STEP_SUMMARY': str(d / 'summary.md')} if summary else {}
+        with mock.patch.object(ta, 'gh', fake_gh), mock.patch.dict(os.environ, env), mock.patch.dict(os.environ, {'TRIAGE_MODE': ''}):
+            if not summary:
+                os.environ.pop('GITHUB_STEP_SUMMARY', None)
+            rc = ta.main(['--repo', 'LNPANDY/NX2Apple', '--issue', '5', '--input', str(d / 'input.json'), '--result', str(d / 'result.txt'),
+                          '--report-dir', str(d)] + (['--mode', mode] if mode is not None else []))
+        self.assertEqual(rc, 0)
+        return d, [c[0:2] for c in calls]
+
+    def test_report_mode_labels_but_posts_nothing(self):
+        for mode in (None, 'report', 'garbage', 'POST'):
+            d, calls = self.run_main(mode)
+            self.assertIn(('issue', 'edit'), calls)
+            self.assertNotIn(('issue', 'comment'), calls)
+            self.assertFalse([c for c in calls if c[0] == 'api' and c[1] == '-X'])
+            md = (d / 'triage-5.md').read_text()
+            self.assertIn('> Please ask in https://github.com/LNPANDY/NX2Apple/discussions/categories/q-a', md)
+            self.assertIn('[#5](https://github.com/LNPANDY/NX2Apple/issues/5)', md)
+            self.assertIn('discussions/categories/q-a', (d / 'summary.md').read_text())
+
+    def test_report_mode_without_summary_variable(self):
+        d, calls = self.run_main('report', summary=False)
+        self.assertTrue((d / 'triage-5.md').exists())
+
+    def test_post_mode_comments(self):
+        d, calls = self.run_main('post')
+        self.assertIn(('issue', 'edit'), calls)
+        self.assertIn(('issue', 'comment'), calls)
+        self.assertFalse((d / 'triage-5.md').exists())
+        self.assertFalse((d / 'summary.md').exists())
 
 
 if __name__ == '__main__':

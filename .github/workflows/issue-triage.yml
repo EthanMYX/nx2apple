@@ -3,7 +3,7 @@
 # Three jobs, each with the least it needs; the issue text is untrusted, so the model never holds a write token:
 #   gather   issues: read, no secrets   reads the issue, extracts log signals, matches docs/agents/symptoms.md, finds duplicate candidates
 #   analyze  no permissions, the model token   the Copilot CLI answers one JSON object; it can only read (--available-tools=view), in an empty directory
-#   apply    issues: write, no model token     validates the JSON strictly (.github/scripts/triage_apply.py), then adds labels and posts one comment
+#   apply    issues: write, no model token     validates the JSON strictly (.github/scripts/triage_apply.py), then adds labels and, only in post mode, posts one comment (report mode, the default: job summary and artifact instead)
 # The workflow never closes an issue, edits code, removes a label or runs on pull_request_target. Without the COPILOT_TOKEN secret it skips with a notice.
 # Setup: README of this change in .github/triage/README.md. Tests: python3 -m unittest discover -s .github/scripts/tests
 name: issue-triage
@@ -16,6 +16,11 @@ on:
       issue_number:
         description: Issue to triage again (an earlier triage comment is updated, not duplicated)
         required: true
+        type: string
+      triage_mode:
+        description: "report (labels only; the comment goes to the job summary) or post (also comment); empty uses the repository variable TRIAGE_MODE, default report"
+        required: false
+        default: ''
         type: string
 
 permissions: {}
@@ -143,6 +148,14 @@ jobs:
       - name: Validate and apply
         env:
           GH_TOKEN: ${{ github.token }}
+          TRIAGE_MODE: ${{ inputs.triage_mode || vars.TRIAGE_MODE }}   # exactly "post" posts; anything else is report
         run: |
+          mkdir -p "$RUNNER_TEMP/triage-report"
           python3 -I .github/scripts/triage_apply.py --repo "$GITHUB_REPOSITORY" --issue "$ISSUE" \
-            --input "$RUNNER_TEMP/triage/input.json" --result "$RUNNER_TEMP/triage/result.txt"
+            --input "$RUNNER_TEMP/triage/input.json" --result "$RUNNER_TEMP/triage/result.txt" --report-dir "$RUNNER_TEMP/triage-report"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: hashFiles(format('{0}/triage-report/*.md', runner.temp)) != ''
+        with:
+          name: triage-report-${{ env.ISSUE }}
+          path: ${{ runner.temp }}/triage-report/triage-${{ env.ISSUE }}.md
+          retention-days: 30
