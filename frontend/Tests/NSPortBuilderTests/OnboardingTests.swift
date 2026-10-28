@@ -165,7 +165,6 @@ final class OnboardingTests: XCTestCase {
         let output = URL(fileURLWithPath: directory)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         NSApplication.shared.setActivationPolicy(.accessory)
-        XCTAssertNotNil(Bundle.module.image(forResource: "OnboardingIcon"))
         for lang: Lang in [.en, .zh] {
             for step in OnboardingStep.allCases {
                 var s = OnboardingState()

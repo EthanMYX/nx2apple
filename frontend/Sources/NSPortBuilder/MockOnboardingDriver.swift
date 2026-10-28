@@ -13,7 +13,12 @@ import Foundation
     private var retriedKeys = false
 
     /// A stored snapshot is injected; persistence belongs to the real driver. `animated: false` is for state tests.
-    init(scenario: Scenario = .fresh, state: OnboardingState = .init(), lang: Lang = .initial(), animated: Bool = true) {
+    /// The demo's invented disk figures live here only; a real driver measures the volume.
+    nonisolated static var sampleState: OnboardingState {
+        var s = OnboardingState(); s.welcome = .requirements(freeGB: 64, neededGB: 24); return s
+    }
+
+    init(scenario: Scenario = .fresh, state: OnboardingState = MockOnboardingDriver.sampleState, lang: Lang = .initial(), animated: Bool = true) {
         self.scenario = scenario; self.state = state; self.lang = lang; self.animated = animated
         if animated { enterStep() }
     }

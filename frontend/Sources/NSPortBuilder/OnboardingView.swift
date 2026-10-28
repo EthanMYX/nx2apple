@@ -130,10 +130,7 @@ import UniformTypeIdentifiers
         VStack(alignment: .leading, spacing: 14) {
             if state.step == .welcome {
                 HStack(spacing: 14) {
-                    if let icon = Bundle.module.image(forResource: "OnboardingIcon") {
-                        Image(nsImage: icon).resizable().scaledToFit().frame(width: 62, height: 62)
-                            .accessibilityHidden(true)
-                    }
+                    OnboardingAppIcon().frame(width: 62, height: 62).accessibilityHidden(true)
                     Text(t("onboarding.brand")).font(.manrope(27, .bold)).tracking(-0.8)
                 }
                 .padding(.bottom, 14)
@@ -577,5 +574,18 @@ private struct OnboardingCheck: View {
         .frame(minWidth: 900, minHeight: 680)
         .foregroundStyle(.white).background(LauncherPalette.background)
         .background(LauncherWindowChrome()).preferredColorScheme(.dark)
+    }
+}
+
+/// The app's own icon. A bare `swift run` executable has no icon (macOS shows a generic one), so
+/// there a symbol stands in. No SwiftPM resource: the release workflow copies only the executable.
+struct OnboardingAppIcon: View {
+    var body: some View {
+        if Bundle.main.bundlePath.hasSuffix(".app") {
+            Image(nsImage: NSApp.applicationIconImage).resizable().scaledToFit()
+        } else {
+            Image(systemName: "gamecontroller.fill").resizable().scaledToFit().padding(10)
+                .foregroundStyle(.secondary)
+        }
     }
 }

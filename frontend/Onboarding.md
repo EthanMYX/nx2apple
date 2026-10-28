@@ -50,7 +50,7 @@ Persist the current step and selections before handling `skipForLater`; inject t
 
 ## Presentation choices
 
-The flow retains the launcher's dark appearance, palette, Manrope, cream capsule primary button, secondary button style and 1.8:1 cover crop. The app currently forces dark mode, so onboarding does too. The existing app icon is packaged as a SwiftPM resource. Background preparation stays beside Xcode, while a fixed footer keeps the primary action visible at the launcher's 900 × 680 minimum window size. Long content scrolls.
+The flow retains the launcher's dark appearance, palette, Manrope, cream capsule primary button, secondary button style and 1.8:1 cover crop. The app currently forces dark mode, so onboarding does too. The welcome icon is the app's own (`NSApp.applicationIconImage` inside the .app, a symbol under `swift run`); there is no SwiftPM resource, because the release workflow copies only the executable. Background preparation stays beside Xcode, while a fixed footer keeps the primary action visible at the launcher's 900 × 680 minimum window size. Long content scrolls.
 
 Return activates the primary action, Escape and controller B go back. Every interactive element has an onboarding controller target. Step headings receive VoiceOver focus, and changing status is announced. Reduced Motion replaces slides with fades, shows completed checks immediately, stops indeterminate loops and disables progress interpolation.
 
@@ -64,4 +64,4 @@ NX_ONBOARDING_CAPTURE_DIR="$PWD/.build/onboarding-captures" swift test --filter 
 
 The last command optionally captures all six screens at minimum window size in English and Simplified Chinese. It only hosts mock SwiftUI views. The normal suite skips that capture unless requested.
 
-Files added: `OnboardingState.swift`, `MockOnboardingDriver.swift`, `OnboardingView.swift`, `Resources/OnboardingIcon.png`, `OnboardingTests.swift`, and this note. Files changed: `NSPortBuilderApp.swift` (demo branch), `Localization.swift` (both languages), and `Package.swift` (icon resource).
+Files added: `OnboardingState.swift`, `MockOnboardingDriver.swift`, `OnboardingView.swift`, `OnboardingTests.swift`, and this note. Files changed: `NSPortBuilderApp.swift` (demo branch) and `Localization.swift` (both languages).

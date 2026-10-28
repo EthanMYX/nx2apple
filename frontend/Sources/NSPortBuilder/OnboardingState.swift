@@ -91,7 +91,7 @@ struct OnboardingState: Equatable {
     enum Primary: Equatable { case start, next, getXcode, finishXcodeSetup, retry, confirmKeys, openLibrary, waiting }
 
     var step: OnboardingStep = .welcome
-    var welcome: Welcome = .requirements(freeGB: 64, neededGB: 24)
+    var welcome: Welcome = .requirements(freeGB: 0, neededGB: 0)
     var platform: Platform = .empty
     var xcode: Xcode = .checking
     var setup: [OnboardingSetupTask: OnboardingTaskState] = [:]
