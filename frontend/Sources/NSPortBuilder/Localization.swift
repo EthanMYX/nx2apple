@@ -535,7 +535,7 @@ enum L10n {
         "dep.installAll": ("一键安装全部缺失项", "Install all missing"),
         // ---- Copy diagnostics (Diagnostics.swift); the report itself is in English, for the issue ----
         "diag.title": ("诊断信息", "Diagnostics"),
-        "diag.note": ("用于问题报告：版本、工具和上次构建的日志，不含密钥。", "For a bug report: versions, tools, the last build’s log. No keys."),
+        "diag.note": ("用于问题报告：版本、工具、上次构建的日志和所选游戏的日志，不含密钥。", "For a bug report: versions, tools, the last build’s log and the selected game’s log. No keys."),
         "diag.copy": ("复制诊断信息", "Copy diagnostics"),
         "diag.copied": ("已复制", "Copied"),
         "dep.recheck": ("重新检测", "Check again"),
@@ -636,6 +636,8 @@ enum L10n {
         "install.step2": ("2\t把上面的 romfs 文件夹整个拷到游戏 App 的 Documents 里（文件 App → 我的 iPhone → 游戏名）",
                           "2\tCopy the whole romfs folder above into the game app's Documents (Files → On My iPhone → game name)"),
         "install.step3": ("3\t启动游戏", "3\tLaunch the game"),
+        "library.showLog": ("显示游戏日志", "Show game log"),
+        "library.showLog.none": ("这个游戏还没有日志，运行一次就会生成", "No game log yet. Play the game once to create it"),
         "install.reveal": ("在访达中显示", "Reveal in Finder"),
 
         // ---- build messages ----
