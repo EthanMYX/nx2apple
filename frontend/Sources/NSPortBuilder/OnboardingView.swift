@@ -390,7 +390,9 @@ import UniformTypeIdentifiers
                                 .clipShape(RoundedRectangle(cornerRadius: 5))
                             }.aspectRatio(1.8, contentMode: .fit).accessibilityHidden(true)
                             Text(game.title).font(.manrope(16, .semibold)).lineLimit(2)
-                            Text(String(format: t("onboarding.games.version"), game.version)).font(.manrope(12)).foregroundStyle(.secondary)
+                            if !game.version.isEmpty {
+                                Text(String(format: t("onboarding.games.version"), game.version)).font(.manrope(12)).foregroundStyle(.secondary)
+                            }
                         }.accessibilityElement(children: .combine)
                     }
                 }

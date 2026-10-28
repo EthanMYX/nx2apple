@@ -9,7 +9,7 @@ struct NSPortBuilderApp: App {
             if let name = ProcessInfo.processInfo.environment["NSPB_ONBOARDING_DEMO"],
                let scenario = MockOnboardingDriver.Scenario(rawValue: name) {
                 OnboardingDemoHost(scenario: scenario)
-            } else { ContentView() }
+            } else { RootView() }
         }
             .windowStyle(.hiddenTitleBar)
             .defaultSize(width: 1280, height: 900)

@@ -1,6 +1,6 @@
 # First-run UI preview
 
-The guided setup is opt-in. Without a recognized `NSPB_ONBOARDING_DEMO` value, the app opens the existing launcher exactly as before. The preview never instantiates `BuildModel`, detects tools, reads selected files, installs anything or opens the App Store. Its exit screen stands in for opening the library.
+With a recognized `NSPB_ONBOARDING_DEMO` value the app shows a scripted preview of the guided setup. The preview never instantiates `BuildModel`, detects tools, reads selected files, installs anything or opens the App Store. Its exit screen stands in for opening the library. Without it, `RootView` (`OnboardingRoot.swift`) runs the real flow described under "The real driver" below, or opens the launcher.
 
 From the repository root, enter `frontend`, then run one scenario:
 
@@ -19,7 +19,9 @@ NSPB_ONBOARDING_DEMO=noGames swift run
 - `xcodeFailed`: setup fails with a plain explanation and expandable diagnostics. Retry, then Finish setup to recover.
 - `noGames`: the mock folder scan finds no NSPs and shows a hint. Use Back or Set up later.
 
-Set up later preserves an in-memory snapshot; Resume setup restores it. Persistence across app launches is deliberately left to the real driver.
+Set up later preserves an in-memory snapshot; Resume setup restores it. The mock persists nothing; the real driver does (below).
+
+`NSPB_ONBOARDING_FORCE=1 swift run` shows the real flow (the live driver, real detection) on launch even when setup is complete or marked done. It writes nothing until the player finishes or picks "Set up later": no `onboarding.completed`, step, platform or build target, and nothing is installed until an install action (Get Xcode, Finish setup, Retry) is pressed. Quitting in between leaves no trace.
 
 ## Wiring contract
 
@@ -47,6 +49,15 @@ Use `OnboardingState.next()` and `.back()` for gated navigation. `canAdvance` re
 Automatic advancement belongs in the driver. The mock gives completed Xcode and keys a brief checkmark hold, then advances. Returning to an already completed step stays there so Back remains useful. Games wait for explicit Continue so the player can review what was found. On a return visit, selecting iPhone after completed Mac setup adds the iOS preparation step.
 
 Persist the current step and selections before handling `skipForLater`; inject the restored state on the next launch and revalidate external prerequisites in the real driver. `MockOnboardingDriver(state:)` demonstrates restoration without preferences or file I/O. Its `animated: false` initializer disables scheduled changes for deterministic tests.
+
+## The real driver
+
+`LiveOnboardingDriver` (`LiveOnboardingDriver.swift`) implements the contract over the launcher's own `BuildModel` and `GameLibrary`, which `RootView` shares with `ContentView`. Everything it does to the machine goes through `OnboardingEnvironment`, so the tests use fakes.
+
+- When it shows: on launch, unless `onboarding.completed` is set or setup is already complete (all tools present, a keys file known, a games folder set; a complete one is marked done without being shown). Settings has "Run setup again". Set up later stores the step, platform and an in-progress flag in `UserDefaults`; the next launch resumes there and revalidates (a stored step past Xcode returns to Xcode when Xcode no longer holds).
+- Detection and installs are `BuildModel.checkDeps` / `deps` / `installDep`, one install at a time (Python, .NET, then Homebrew and the formulas). Homebrew waits for Xcode to be ready. The xcode row asks for the iOS SDK only when the stored platform is not Mac-only or builds target an iPhone (`BuildModel.needsIOSPlatform`).
+- Xcode: missing opens the App Store and polls /Applications for it; setup is one administrator prompt (`OnboardingAdmin.source`: `xcode-select -s`, `xcodebuild -license accept`, `-runFirstLaunch`), then the Metal Toolchain and, for iPhone or both, the iOS platform without it. A cancelled prompt returns to `needsSetup`.
+- Keys are found in `~/.switch`, `~/Downloads` and the games folder, checked by `KeyCheck`, and only the path goes into the keys slot. Games use `GameLibrary.sourceGames`, `BuildModel.scan` and `GameLibrary.setFolder`.
 
 ## Presentation choices
 
