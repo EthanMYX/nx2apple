@@ -50,7 +50,7 @@ Persist the current step and selections before handling `skipForLater`; inject t
 
 ## Presentation choices
 
-The flow retains the launcher's dark appearance, palette, Manrope, cream capsule primary button, secondary button style and 1.8:1 cover crop. The app currently forces dark mode, so onboarding does too. The welcome icon is the app's own (`NSApp.applicationIconImage` inside the .app, a symbol under `swift run`); there is no SwiftPM resource, because the release workflow copies only the executable. Background preparation stays beside Xcode, while a fixed footer keeps the primary action visible at the launcher's 900 × 680 minimum window size. Long content scrolls.
+The flow retains the launcher's dark appearance, palette, Manrope, cream capsule primary button, secondary button style and 1.8:1 cover crop. The app currently forces dark mode, so onboarding does too. Background preparation stays beside Xcode, while a fixed footer keeps the primary action visible at the launcher's 900 × 680 minimum window size. Long content scrolls. The two Xcode cards share one fixed height across all of that step's states (content scrolls inside a card rather than resizing it), and the platform, keys and games cards keep their size between states.
 
 Return activates the primary action, Escape and controller B go back. Every interactive element has an onboarding controller target. Step headings receive VoiceOver focus, and changing status is announced. Reduced Motion replaces slides with fades, shows completed checks immediately, stops indeterminate loops and disables progress interpolation.
 

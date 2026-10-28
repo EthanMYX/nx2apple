@@ -12,7 +12,6 @@ import UniformTypeIdentifiers
     @State private var detailsOpen = false
     @State private var pickerError: String?
     @State private var backwards = false
-    @State private var entered = false
     @AccessibilityFocusState private var headingFocused: Bool
 
     init(driver: Driver, lang: Lang = .initial(), gamepad: LauncherGamepad? = nil) {
@@ -75,7 +74,6 @@ import UniformTypeIdentifiers
         .onAppear {
             padFocus.scope = "onboarding"
             gamepad.perform = padAction
-            withAnimation(.easeOut(duration: 0.35)) { entered = true }
             headingFocused = true
         }
         .onDisappear { gamepad.perform = { _ in } }
@@ -128,15 +126,6 @@ import UniformTypeIdentifiers
 
     private var heading: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if state.step == .welcome {
-                HStack(spacing: 14) {
-                    OnboardingAppIcon().frame(width: 62, height: 62).accessibilityHidden(true)
-                    Text(t("onboarding.brand")).font(.manrope(27, .bold)).tracking(-0.8)
-                }
-                .padding(.bottom, 14)
-                .opacity(entered ? 1 : 0)
-                .offset(y: reduceMotion || entered ? 0 : 8)
-            }
             if state.step == .done {
                 OnboardingCheck(lang: lang).frame(width: 64, height: 64).padding(.bottom, 12)
             }
@@ -207,14 +196,14 @@ import UniformTypeIdentifiers
                             Spacer()
                             Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                                 .foregroundStyle(selected ? LauncherPalette.cream : Color.white.opacity(0.2))
-                        }.accessibilityHidden(true)
+                        }.frame(height: 40, alignment: .top).accessibilityHidden(true)   // symbols differ in height: the titles stay on one line
                         Text(t("onboarding.platform.\(platform.rawValue)")).font(.manrope(22, .bold))
                         Text(t(platform.includesIOS ? "onboarding.platform.iosSize" : "onboarding.platform.macNote"))
                             .font(.manrope(13)).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 0)
                     }
-                    .padding(24).frame(maxWidth: .infinity, minHeight: 200, alignment: .topLeading)
+                    .padding(24).frame(maxWidth: .infinity, minHeight: 216, maxHeight: 216, alignment: .topLeading)
                     .background(selected ? LauncherPalette.cream.opacity(0.07) : LauncherPalette.surface, in: RoundedRectangle(cornerRadius: 14))
                     .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(selected ? LauncherPalette.cream : Color.white.opacity(0.10), lineWidth: selected ? 2 : 1))
                     .contentShape(RoundedRectangle(cornerRadius: 14))
@@ -226,9 +215,21 @@ import UniformTypeIdentifiers
         }
     }
 
+    /// Both Xcode cards have this content height in every state (the tallest is setting up with the iOS sub-step), so nothing
+    /// jumps when the state changes; content sits at the top and scrolls inside the card when it is longer.
+
+    private func fixedCard<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        ScrollView {
+            content().frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .frame(height: onboardingXcodeCardHeight, alignment: .top)
+        .modifier(OnboardingCard())
+    }
+
     private var xcode: some View {
         HStack(alignment: .top, spacing: 22) {
-            VStack(alignment: .leading, spacing: 20) {
+            fixedCard {
+              VStack(alignment: .leading, spacing: 20) {
                 HStack(spacing: 12) {
                     xcodeIcon
                     Text(t(state.xcode.statusKey)).font(.manrope(18, .semibold))
@@ -247,17 +248,19 @@ import UniformTypeIdentifiers
                     }
                 case let .failed(failure): failureView(failure)
                 }
+              }
             }
-            .frame(maxWidth: .infinity, alignment: .leading).modifier(OnboardingCard())
-            VStack(alignment: .leading, spacing: 20) {
+            fixedCard {
+              VStack(alignment: .leading, spacing: 20) {
                 Text(t("onboarding.background.title")).font(.manrope(14, .semibold))
                 ForEach(OnboardingBackgroundTask.allCases, id: \.self) { task in
                     taskRow(task.titleKey, status: state.background[task] ?? .queued)
                 }
                 Text(t("onboarding.background.note")).font(.manrope(12)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+              }
             }
-            .frame(width: 230, alignment: .leading).modifier(OnboardingCard())
         }
     }
 
@@ -329,6 +332,8 @@ import UniformTypeIdentifiers
         }
     }
 
+    /// Content height of the keys card and the least of the games card, so their states do not resize them.
+
     private var keys: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 12) {
@@ -349,7 +354,9 @@ import UniformTypeIdentifiers
                 dropZone(keys: true, enabled: state.keys != .validating)
             }
             Text(t("onboarding.keys.privacy")).font(.manrope(12)).foregroundStyle(.secondary)
-        }.modifier(OnboardingCard())
+        }
+        .frame(minHeight: onboardingDropCardHeight, alignment: .topLeading)   // the same size whether it asks, checks or is done
+        .modifier(OnboardingCard())
     }
 
     private var games: some View {
@@ -389,6 +396,7 @@ import UniformTypeIdentifiers
             }
             dropZone(keys: false, enabled: state.games != .scanning)
         }
+        .frame(minHeight: onboardingDropCardHeight, alignment: .topLeading)
     }
 
     private func dropZone(keys: Bool, enabled: Bool) -> some View {
@@ -457,6 +465,9 @@ import UniformTypeIdentifiers
         }
     }
 }
+
+private let onboardingXcodeCardHeight: CGFloat = 270
+private let onboardingDropCardHeight: CGFloat = 250
 
 private struct OnboardingCard: ViewModifier {
     func body(content: Content) -> some View {
@@ -574,18 +585,5 @@ private struct OnboardingCheck: View {
         .frame(minWidth: 900, minHeight: 680)
         .foregroundStyle(.white).background(LauncherPalette.background)
         .background(LauncherWindowChrome()).preferredColorScheme(.dark)
-    }
-}
-
-/// The app's own icon. A bare `swift run` executable has no icon (macOS shows a generic one), so
-/// there a symbol stands in. No SwiftPM resource: the release workflow copies only the executable.
-struct OnboardingAppIcon: View {
-    var body: some View {
-        if Bundle.main.bundlePath.hasSuffix(".app") {
-            Image(nsImage: NSApp.applicationIconImage).resizable().scaledToFit()
-        } else {
-            Image(systemName: "gamecontroller.fill").resizable().scaledToFit().padding(10)
-                .foregroundStyle(.secondary)
-        }
     }
 }

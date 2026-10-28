@@ -41,7 +41,6 @@ enum Lang: String {
 enum L10n {
     /// key: (Chinese, English)
     static let table: [String: (zh: String, en: String)] = [
-        "onboarding.brand": ("NX2Apple", "NX2Apple"),
         "onboarding.welcome.title": ("\u{51c6}\u{5907}\u{5f00}\u{59cb}\u{6e38}\u{620f}\u{3002}", "Make yourself at home."),
         "onboarding.welcome.note": ("\u{7ea6} 15 \u{5206}\u{949f}\u{ff0c}\u{5373}\u{53ef}\u{5728} Mac \u{4e0a}\u{539f}\u{751f}\u{8fd0}\u{884c}\u{4f60}\u{7684} Switch \u{6e38}\u{620f}\u{3002}", "Play your Switch games natively on your Mac, in about 15 minutes."),
         "onboarding.platform.title": ("\u{4f60}\u{60f3}\u{5728}\u{54ea}\u{91cc}\u{73a9}\u{ff1f}", "Where do you want to play?"),

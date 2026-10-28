@@ -193,5 +193,28 @@ final class OnboardingTests: XCTestCase {
                 window.orderOut(nil)
             }
         }
+        // The Xcode step keeps one card size across its states: capture each to compare.
+        let failure = OnboardingFailure(message: "The Metal Toolchain could not be downloaded.", details: "HTTP 503")
+        let states: [(String, OnboardingState.Xcode)] = [("checking", .checking), ("missing", .missing), ("downloading", .downloading),
+            ("needsSetup", .needsSetup), ("settingUp", .settingUp), ("ready", .ready), ("failed", .failed(failure))]
+        for (name, xcode) in states {
+            var s = OnboardingState()
+            s.step = .xcode; s.platform = .selected(.both); s.xcode = xcode
+            s.setup = [.selected: .done, .license: .done, .firstLaunch: .done, .metal: .running(0.65), .ios: .running(0.2)]
+            s.background = [.python: .done, .dotnet: .running(0.5), .tools: .queued]
+            let driver = MockOnboardingDriver(state: s, lang: .en, animated: false)
+            let host = NSHostingView(rootView: OnboardingView(driver: driver, lang: .en))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 680),
+                                  styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            window.contentView = host
+            window.orderFront(nil)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+            host.layoutSubtreeIfNeeded()
+            let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: rep)
+            try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+                .write(to: output.appendingPathComponent("xcode-\(name)-en.png"))
+            window.orderOut(nil)
+        }
     }
 }
