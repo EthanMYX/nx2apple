@@ -27,8 +27,11 @@ struct OnboardingEnvironment {
     var defaults: UserDefaults = .standard
     var home = NSHomeDirectory()
     var freeBytes: () -> Int64? = { OnboardingEnvironment.homeVolumeFreeBytes() }
-    /// A cheap look at /Applications, for the poll while the App Store installs Xcode.
-    var xcodeInstalled: () -> Bool = { OnboardingEnvironment.xcodeApps().first != nil }
+    /// Whether a working Xcode is there, for the poll while the App Store installs it: `xcodebuild -version` must exit 0,
+    /// because the App Store creates Xcode.app while it is still downloading. Runs off the main thread.
+    var xcodeInstalled: () async -> Bool = { await Task.detached { OnboardingEnvironment.xcodeApps().first != nil }.value }
+    /// Only whether an Xcode*.app folder exists (no process): the Welcome estimate reads it.
+    var xcodeFolderExists: () -> Bool = { OnboardingEnvironment.xcodeFolders().first != nil }
     var xcodeProbe: () async -> XcodeProbe = { await OnboardingEnvironment.liveProbe() }
     /// One administrator prompt around the whole script (`OnboardingAdmin.source`).
     var runAdmin: (_ developerDir: String) async -> AdminResult = { await OnboardingAdmin.run(developerDir: $0) }
@@ -62,12 +65,15 @@ struct OnboardingEnvironment {
         return values?.volumeAvailableCapacityForImportantUsage
     }
 
-    /// Xcode*.app in /Applications that hold a working xcodebuild (the App Store creates the folder before it is complete).
-    static func xcodeApps() -> [String] {
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: "/Applications")) ?? []
-        return names.filter { $0.hasPrefix("Xcode") && $0.hasSuffix(".app") }.sorted()
-            .map { "/Applications/" + $0 }
-            .filter { FileManager.default.isExecutableFile(atPath: $0 + "/Contents/Developer/usr/bin/xcodebuild") }
+    static func xcodeFolders(in directory: String = "/Applications") -> [String] {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? []
+        return names.filter { $0.hasPrefix("Xcode") && $0.hasSuffix(".app") }.sorted().map { directory + "/" + $0 }
+    }
+
+    /// Xcode*.app that really work: the App Store creates the folder while Xcode is still downloading, so only an
+    /// `xcodebuild -version` that exits 0 counts.
+    static func xcodeApps(in directory: String = "/Applications") -> [String] {
+        xcodeFolders(in: directory).filter { BuildModel.runOK($0 + "/Contents/Developer/usr/bin/xcodebuild", ["-version"]) }
     }
 
     static func liveProbe() async -> XcodeProbe {
@@ -120,15 +126,27 @@ enum OnboardingAdmin {
             + "& \" && /usr/bin/xcodebuild -license accept && /usr/bin/xcodebuild -runFirstLaunch\" with administrator privileges"
     }
 
+    /// osascript's exit status and stderr as a result: -128 is the person cancelling the password prompt.
+    static func result(status: Int32, stderr: String) -> AdminResult {
+        if status == 0 { return .ok }
+        if stderr.contains("(-128)") { return .cancelled }
+        return .failed(stderr)
+    }
+
+    /// Runs the script with `/usr/bin/osascript` as a child process, off the main thread (NSAppleScript is not thread-safe).
+    /// The script is one argument, so the path is never interpolated into a shell command line of ours.
     static func run(developerDir: String) async -> AdminResult {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                var error: NSDictionary?
-                _ = NSAppleScript(source: source(developerDir: developerDir))?.executeAndReturnError(&error)
-                guard let error else { return continuation.resume(returning: .ok) }
-                let number = error["NSAppleScriptErrorNumber"] as? Int
-                // -128: the person cancelled the password prompt
-                continuation.resume(returning: number == -128 ? .cancelled : .failed((error["NSAppleScriptErrorMessage"] as? String) ?? "\(error)"))
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+                p.arguments = ["-e", source(developerDir: developerDir)]
+                let err = Pipe()
+                p.standardError = err; p.standardOutput = FileHandle.nullDevice; p.standardInput = FileHandle.nullDevice
+                do { try p.run() } catch { return continuation.resume(returning: .failed(error.localizedDescription)) }
+                let data = err.fileHandleForReading.readDataToEndOfFile()
+                p.waitUntilExit()
+                continuation.resume(returning: result(status: p.terminationStatus, stderr: String(data: data, encoding: .utf8) ?? ""))
             }
         }
     }
@@ -388,7 +406,7 @@ enum OnboardingLaunch {
     }
 
     func updateWelcome() {
-        let needed = Self.neededGB(xcodeMissing: probed ? probe.appPath == nil : !env.xcodeInstalled(),
+        let needed = Self.neededGB(xcodeMissing: probed ? probe.appPath == nil : !env.xcodeFolderExists(),
                                    includesIOS: state.selectedPlatform?.includesIOS == true)
         // Whole GB as Finder counts them (10^9). Without a reading the volume is taken to have room: nothing to warn about.
         let free = env.freeBytes().map { Int($0 / 1_000_000_000) } ?? needed
@@ -433,7 +451,7 @@ enum OnboardingLaunch {
             while !Task.isCancelled, d.state.step == .xcode, d.state.exit == nil {
                 try? await Task.sleep(nanoseconds: UInt64(d.env.pollInterval * 1_000_000_000))
                 if Task.isCancelled { return }
-                if d.env.xcodeInstalled() {
+                if await d.env.xcodeInstalled() {
                     d.waitingForXcode = false
                     await d.refreshXcode()
                     d.advanceIfReady()

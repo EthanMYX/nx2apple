@@ -14,6 +14,7 @@ import XCTest
         var onDetect: (BuildModel) -> Void = { _ in }
         var keyOutcome = KeyCheck.Outcome.fits
         var games: [LibraryGame] = []
+        var xcodeWorks: Bool?   // nil: follows the probe
     }
 
     func dep(_ id: String, present: Bool) -> BuildModel.Dep {
@@ -43,7 +44,8 @@ import XCTest
         env.defaults = defaults
         env.home = home.path
         env.freeBytes = { 100_000_000_000 }
-        env.xcodeInstalled = { fake.probe.appPath != nil }
+        env.xcodeInstalled = { fake.xcodeWorks ?? (fake.probe.appPath != nil) }
+        env.xcodeFolderExists = { fake.probe.appPath != nil }
         env.xcodeProbe = { fake.probe }
         env.runAdmin = { fake.adminCalls.append($0); return fake.admin }
         env.run = { cmd, line in fake.commands.append(cmd); line("Downloading Metal Toolchain: 45.5% (1 MB of 2 MB)"); return fake.commandResult }
@@ -203,6 +205,38 @@ import XCTest
         fake.probe = XcodeProbe(appPath: "/Applications/Xcode.app", selectedIsXcode: false)
         await driver.settle()
         XCTAssertEqual(driver.state.xcode, .needsSetup)
+    }
+
+    func testPartialXcodeFolderKeepsDownloadingUntilXcodebuildWorks() async {
+        let fake = Fake(); fake.probe = XcodeProbe(); fake.xcodeWorks = false
+        let (driver, _) = make(fake, deps: [dep("metal", present: true)], step: .xcode, platform: .mac)
+        await driver.refreshXcode()
+        driver.getXcode()
+        try? await Task.sleep(nanoseconds: 100_000_000)   // several polls: the folder exists, xcodebuild -version does not work yet
+        XCTAssertEqual(driver.state.xcode, .downloading)
+        fake.probe = XcodeProbe(appPath: "/Applications/Xcode.app", selectedIsXcode: false)
+        fake.xcodeWorks = true
+        await driver.settle()
+        XCTAssertEqual(driver.state.xcode, .needsSetup)
+    }
+
+    func testXcodeCountsOnlyWhereXcodebuildVersionExitsZero() throws {
+        let apps = home.appendingPathComponent("apps")
+        for (name, status) in [("Xcode.app", 1), ("Xcode-beta.app", 0)] {   // the first stands for a download in progress
+            let bin = apps.appendingPathComponent("\(name)/Contents/Developer/usr/bin")
+            try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+            let tool = bin.appendingPathComponent("xcodebuild")
+            try "#!/bin/sh\nexit \(status)\n".write(to: tool, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tool.path)
+        }
+        XCTAssertEqual(OnboardingEnvironment.xcodeFolders(in: apps.path).count, 2)
+        XCTAssertEqual(OnboardingEnvironment.xcodeApps(in: apps.path).map { ($0 as NSString).lastPathComponent }, ["Xcode-beta.app"])
+    }
+
+    func testOsascriptResultMapsCancelAndFailure() {
+        XCTAssertEqual(OnboardingAdmin.result(status: 0, stderr: ""), .ok)
+        XCTAssertEqual(OnboardingAdmin.result(status: 1, stderr: "execution error: User canceled. (-128)\n"), .cancelled)
+        XCTAssertEqual(OnboardingAdmin.result(status: 1, stderr: "execution error: boom (1)"), .failed("execution error: boom (1)"))
     }
 
     func testBackgroundInstallsRunOneAtATimeAndToolsWaitForXcode() async {
