@@ -2,6 +2,10 @@
 
 Issues and pull requests are welcome. NX2Apple is the launcher (`frontend/`, `frontend-qt/`) and the glue around the [nxnative](https://github.com/seedds/nxnative) engine, which is vendored here and synced from upstream every day. [AGENTS.md](AGENTS.md) describes the engine.
 
+## Reporting a problem
+
+Game problems, build problems and launcher problems each have an issue form (`.github/ISSUE_TEMPLATE/`); the form asks for what a report needs — versions, device, Copy diagnostics and the game's log. Use it from the Issues page; a report without those is usually unactionable.
+
 ## Where an issue goes
 
 - **Here:** the app, a build or install that fails, and a game that does not run well on your Mac or iPhone or iPad.
