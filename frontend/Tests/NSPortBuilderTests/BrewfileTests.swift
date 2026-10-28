@@ -23,9 +23,21 @@ final class BrewfileTests: XCTestCase {
     }
 
     func testBrewfileFormulaeAreTheLaunchersDependencies() throws {
-        let launcher = Set(BuildModel.brewDeps.map { $0.formula } + BuildModel.optionalBrewFormulae)
+        let launcher = Set(BuildModel.brewDeps.map { $0.formula })
         XCTAssertEqual(Set(try entries("brew")), launcher)
         XCTAssertEqual(try entries("brew").count, launcher.count, "a formula is listed twice")
+    }
+
+    func testGlslangIsAnOptionalRowThatDoesNotBlockBuilding() throws {
+        let rows = BuildModel.brewDeps.filter { !$0.required }
+        XCTAssertEqual(rows.map { $0.formula }, ["glslang"])
+        for r in rows { XCTAssertNotNil(L10n.table[r.key]); XCTAssertNotNil(L10n.table[r.key + ".hint"]) }
+        let model = BuildModel()
+        model.depsChecked = true
+        model.deps = [BuildModel.Dep(id: "g", name: "dep.glslang", hint: "dep.glslang.hint", present: false, required: false, installCmd: [])]
+        XCTAssertTrue(model.allDepsPresent)
+        model.deps.append(BuildModel.Dep(id: "z", name: "dep.zstd", hint: "", present: false, installCmd: []))
+        XCTAssertFalse(model.allDepsPresent)
     }
 
     func testBrewfileCaskIsTheDotnetSdkTheLauncherNeeds() throws {

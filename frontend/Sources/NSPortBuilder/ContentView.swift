@@ -1835,6 +1835,9 @@ final class BuildModel: ObservableObject {
         var present: Bool
         var installing = false
         var detail = ""
+        /// An optional tool (glslangValidator, only for OpenGL games) that is missing neither counts in
+        /// "N missing" nor stops a build.
+        var required = true
         let installCmd: [String]      // run via bash; empty = manual (Xcode from the App Store)
     }
 
@@ -1872,11 +1875,14 @@ final class BuildModel: ObservableObject {
 
     /// The Homebrew formulae the dependency check offers, with the localization key of each row. The repo-root
     /// Brewfile lists the same formulae (BrewfileTests keeps the two equal).
-    nonisolated static let brewDeps: [(formula: String, key: String)] =
-        [("xcodegen", "dep.xcodegen"), ("zstd", "dep.zstd"), ("spirv-cross", "dep.spirv")]
-
-    /// Formulae the Brewfile also installs that the check does not ask for: glslang is only for OpenGL (LÖVE) games.
-    nonisolated static let optionalBrewFormulae = ["glslang"]
+    /// `binary` is the file the formula puts in the Homebrew bin folder. glslang is optional: only OpenGL (LÖVE)
+    /// games need it, so a missing one is shown but does not block a build.
+    nonisolated static let brewDeps: [(formula: String, binary: String, key: String, required: Bool)] = [
+        ("xcodegen", "xcodegen", "dep.xcodegen", true),
+        ("zstd", "zstd", "dep.zstd", true),
+        ("spirv-cross", "spirv-cross", "dep.spirv", true),
+        ("glslang", "glslangValidator", "dep.glslang", false),
+    ]
 
     /// The interpreter probe: lz4 / capstone / fontTools always, and zstd from either source —
     /// `compression.zstd` is built in from Python 3.14 and `backports.zstd` (which declares
@@ -2101,10 +2107,10 @@ final class BuildModel: ObservableObject {
         out.append(Dep(id: "brew", name: "dep.brew", hint: "dep.brew.hint", present: brew != nil,
                        installCmd: ["/bin/bash", "-c",
                          "NONINTERACTIVE=1 /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""]))
-        for (pkg, key) in brewDeps {
-            let path = firstExisting(["/opt/homebrew/bin/\(pkg)", "/usr/local/bin/\(pkg)"])
+        for (pkg, binary, key, required) in brewDeps {
+            let path = firstExisting(["/opt/homebrew/bin/\(binary)", "/usr/local/bin/\(binary)"])
             out.append(Dep(id: "brew:" + pkg, name: key, hint: key + ".hint", present: path != nil,
-                           detail: path ?? "",
+                           detail: path ?? (required ? "" : "dep.optionalMissing"), required: required,
                            installCmd: [(brew ?? "/opt/homebrew/bin/brew"), "install", pkg]))
         }
 
@@ -2199,7 +2205,7 @@ final class BuildModel: ObservableObject {
         return p.terminationStatus == 0
     }
 
-    var allDepsPresent: Bool { depsChecked && deps.allSatisfy { $0.present } }
+    var allDepsPresent: Bool { depsChecked && deps.allSatisfy { $0.present || !$0.required } }
 
     /// Home shown as ~ (shorter in a one-line row, and it keeps the account name out of
     /// screenshots).
@@ -2790,7 +2796,7 @@ struct BuilderView: View {
             Button(action: { withAnimation(.easeInOut(duration: 0.18)) { m.toggleDeps() } }) {
                 row(m.t("dep.title"),
                     detail: !m.depsChecked ? m.t("dep.checking")
-                        : (m.allDepsPresent ? m.t("dep.allReady") : String(format: m.t("dep.missing"), m.deps.filter { !$0.present }.count)),
+                        : (m.allDepsPresent ? m.t("dep.allReady") : String(format: m.t("dep.missing"), m.deps.filter { $0.required && !$0.present }.count)),
                     dot: !m.depsChecked ? LauncherPalette.unbuilt : (m.allDepsPresent ? LauncherPalette.ready : LauncherPalette.building),
                     open: m.depsOpen) {
                     if !m.depsChecked { ProgressView().controlSize(.small) }
@@ -2803,7 +2809,7 @@ struct BuilderView: View {
             if m.depsOpen {
                 ForEach(m.deps, id: \.id) { d in
                     divider
-                    row(m.t(d.name), detail: m.shortPath(m.depDetail(d)), dot: d.present ? LauncherPalette.ready : LauncherPalette.building,
+                    row(m.t(d.name), detail: m.shortPath(m.depDetail(d)), dot: d.present ? LauncherPalette.ready : (d.required ? LauncherPalette.building : LauncherPalette.unbuilt),
                         help: m.t(d.hint)) {
                         if d.installing {
                             ProgressView().controlSize(.small)
