@@ -284,7 +284,7 @@ def fix_hint(diff, patches):
         if f in gen: lines.append(f'{f} is generated: run `python3 scripts/patches.py apply`')
         else: lines.append(f'{f} differs from pin+patches: run `python3 scripts/patches.py absorb {f}` and commit patches/')
     if absorbable:
-        lines.append(f'To fold all of them at once: `python3 scripts/patches.py absorb {" ".join(absorbable[:6])}{" ..." if len(absorbable) > 6 else ""}`, then commit patches/ (and dm/fork_patches.txt if it changed).')
+        lines.append('To fold all of them at once: `python3 scripts/patches.py absorb`, then commit patches/ (and dm/fork_patches.txt if it changed).')
         lines.append('A new file goes to the patch that owns its folder; if that is ambiguous, absorb stops and asks for `--into <patch>` (see `scripts/patches.py status`).')
         lines.append('A change that deserves its own patch (new Upstream-Status, Reason, Issue): commit it, then `python3 scripts/patches.py export <commit>`. See patches/README.md.')
     else:
@@ -505,7 +505,12 @@ def cmd_absorb(a):
         want = tree_files(s.dir)
     have = local_files(root)
     changed = [p for p in sorted(set(want) | set(have)) if want.get(p) != have.get(p)]
-    sel = [x.rstrip('/') for x in a.paths]
+    sel = []
+    for x in a.paths:
+        rel = os.path.relpath(os.path.realpath(x), root).replace(os.sep, '/')
+        if rel == '..' or rel.startswith('../'): raise Fail(f'{x} is outside the checkout')
+        sel.append('' if rel == '.' else rel)
+    if '' in sel: sel = []   # "." is the whole tree
     if sel: changed = [p for p in changed if any(p == x or p.startswith(x + '/') for x in sel)]
     changed = [p for p in changed if p not in gen]
     if not changed:
@@ -524,9 +529,12 @@ def cmd_absorb(a):
     with Scratch(root, sha, a.tmp) as s:
         wt, new = s.dir, {}
         for i, p in enumerate(patches):
+            before = git('rev-parse', 'HEAD^{tree}', cwd=wt).stdout
             r = am(wt, p)
             if r.returncode:
                 raise Fail(f'{p.file} no longer applies after absorbing into an earlier patch ({(r.stderr or r.stdout).strip()[-300:]}); name a later patch with --into')
+            if git('rev-parse', 'HEAD^{tree}', cwd=wt).stdout == before:
+                raise Fail(f'{p.file} would be empty after absorbing into an earlier patch (its change is already there); name that patch with --into. No patch was changed')
             if i not in plan: continue
             for f in plan[i]:
                 if f in have:
@@ -535,6 +543,8 @@ def cmd_absorb(a):
                     git('add', '--', f, cwd=wt)
                 else: git('rm', '-q', '-f', '--', f, cwd=wt)
             git(*ident, 'commit', '-q', '--amend', '--no-edit', '--allow-empty', cwd=wt)
+            if git('diff', '--quiet', 'HEAD^', 'HEAD', cwd=wt, check=False).returncode == 0:
+                raise Fail(f'absorbing {", ".join(plan[i])} would leave {p.file} empty (a full revert of that patch); delete the patch and its line in patches/series instead. No patch was changed')
             new[i] = git('format-patch', '--binary', '--zero-commit', '--no-signature', '--no-numbered', '--stdout', '-1', 'HEAD', cwd=wt, binary=True).stdout
     for i, text in new.items():
         patches[i].path.write_bytes(text)
