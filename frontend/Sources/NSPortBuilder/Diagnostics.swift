@@ -43,7 +43,7 @@ struct Diagnostics {
         if let commit = i.commit {
             var line = "- Commit: \(commit)" + (i.branch.map { " (branch \($0))" } ?? "")
             if !i.behind.isEmpty {
-                line += "; " + i.behind.map { "\($0.count) behind \($0.ref)" }.joined(separator: ", ")
+                line += ", " + i.behind.map { "\($0.count) behind \($0.ref)" }.joined(separator: ", ")
                 if let fetched = i.lastFetch { line += " as of the last fetch, " + stamp(fetched) }
             }
             out.append(line)
