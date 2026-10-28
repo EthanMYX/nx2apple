@@ -385,6 +385,13 @@ DM_FPS_TARGET=30       # cap the frame rate (saves battery; the profile's fps_ta
 DM_OPMODE=0            # handheld mode: 720p render instead of the docked 1080p
 ```
 
+**On the Mac,** the launcher's *Launch options* sheet has the same choices (game language, frame
+rate, console mode, ...). They are kept per game and survive rebuilds. For a setting the sheet does
+not have, or to fix one, write an `env.txt` with the same `KEY=VALUE` lines (`DM_LANG=zh-Hans`) in
+one of two places: `~/Library/Application Support/nxnative/<title ID>/env.txt` wins and survives
+rebuilds; `<App>.app/Contents/Resources/dm/env.txt` is the app's own. Apps built before the
+language row was added need one rebuild to get it.
+
 **Saves and logs** are in the Files app under the app's name: `save/` and `log.txt`. When something
 goes wrong, send `log.txt` (the previous run is `log.prev.txt`). Short stutters the first time a new
 scene appears are normal: the app compiles graphics for it once and remembers them.
