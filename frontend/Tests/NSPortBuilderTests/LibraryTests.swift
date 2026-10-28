@@ -700,6 +700,10 @@ final class LibraryTests: XCTestCase {
         let examples = [(titleID, "Hades"), ("01007EF00011E000", "The Legend of Zelda: Breath of the Wild"),
                         ("0100000000010000", "Super Mario Odyssey"), ("010093801237C000", "Metroid Dread")]
         for (id, name) in examples.prefix(3) { _ = try library.addApp(makeApp(id, name: name)) }
+        // The selected game (Hades) has run: its log is beside the app, so Manage > Show game log is on in the capture.
+        try Data().write(to: temporary.appendingPathComponent(GameLog.marker))
+        try FileManager.default.createDirectory(at: temporary.appendingPathComponent("log"), withIntermediateDirectories: true)
+        try Data("fork patches: none\n".utf8).write(to: temporary.appendingPathComponent("log/\(titleID).log"))
         model.slots[0].paths = ["/preview/Metroid Dread [010093801237C000].nsp"]
         _ = library.rememberInputs(model)
         model.slots[0].paths = []
