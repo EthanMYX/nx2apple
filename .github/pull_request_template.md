@@ -7,7 +7,7 @@
 ## Checked
 
 <!-- Delete what does not apply. Say what was not checked too. -->
-- Tests: <!-- `cd frontend && swift test`; frontend-qt tests if you changed it; for scripts/sync_upstream.py, the sync run on a scratch checkout -->
+- Tests: <!-- `cd frontend && swift test`; frontend-qt tests if you changed it; for scripts/sync_upstream.py, `python3 -m pytest scripts/tests/test_sync_patchers.py` (fetch `seedds main` first; CI runs it with unittest) and the sync run on a scratch checkout -->
 - Visual QA: <!-- `NX_LAUNCHER_CAPTURE_DIR=<dir> swift test` captures the views, for a UI change -->
 - Run on a device or Mac: <!-- what was built, played or installed, with title ID and version; chip and OS -->
 
