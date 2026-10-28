@@ -6,7 +6,7 @@ Subject: [PATCH] build_ipa.sh: slim package by default (DM_FULL_ROMFS=1 packs
 
 Maps the RomFS and add-on content into the IPA only with DM_FULL_ROMFS; the app reads them from Documents/games/<id>/.
 
-Upstream-Status: fork-only (declined seedds/nxnative#478)
+Upstream-Status: fork-only (upstream has the opt-in DM_COPY_ROMFS=NO since 32ae3b11; the fork's slim default differs)
 Reason: Default slim IPA: the RomFS and aoc/ stay out unless DM_FULL_ROMFS=1 (a full package of a large game is many GB and iOS refuses it). Upstream took the opt-out DM_COPY_ROMFS=NO and kept the full package as its default
 Issue: LNPANDY/NX2Apple#123
 ---
