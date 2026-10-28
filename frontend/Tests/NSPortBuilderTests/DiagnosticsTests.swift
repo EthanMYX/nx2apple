@@ -32,7 +32,7 @@ final class DiagnosticsTests: XCTestCase {
             "- macOS: Version 26.1 (Build 25B78)",
             "- Chip: Apple M3 Pro",
             "- Repository: ~/repos/NX2Apple",
-            "- Commit: d66e4ddd CI: the legacy zip names are hyphenated (branch main); 3 behind upstream/main, 0 behind origin/main as of the last fetch, 2026-10-27 09:05",
+            "- Commit: d66e4ddd CI: the legacy zip names are hyphenated (branch main), 3 behind upstream/main, 0 behind origin/main as of the last fetch, 2026-10-27 09:05",
             "- Python: ~/Library/Application Support/NS Port Builder/venv/bin/python3 (3.13.1, the launcher's venv)",
             "- .NET: ~/.dotnet/dotnet (10.0.100)",
             "- Dependencies: 1 missing",
