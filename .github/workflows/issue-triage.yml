@@ -1,4 +1,4 @@
-# Issue triage and log first aid, run by the GitHub Copilot CLI on a Copilot subscription (about one premium request per issue).
+# Issue triage and log first aid, run by the GitHub Copilot CLI on a Copilot subscription (see .github/triage/README.md for the cost).
 #
 # Three jobs, each with the least it needs; the issue text is untrusted, so the model never holds a write token:
 #   gather   issues: read, no secrets   reads the issue, extracts log signals, matches docs/agents/symptoms.md, finds duplicate candidates
@@ -97,14 +97,19 @@ jobs:
         if: steps.secret.outputs.set == 'true'
         env:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN }}
-          COPILOT_MODEL: ${{ vars.TRIAGE_MODEL }}   # optional repository variable; empty keeps the CLI's default
+          TRIAGE_MODEL: ${{ vars.TRIAGE_MODEL }}   # optional repository variable (a model id, e.g. claude-haiku-4.5); unset keeps GitHub's default
         run: |
           # An empty directory holds nothing to read. The model can only call `view`; shell, file writes and URLs are denied
           # (deny rules win over --allow-all-tools, which prompt mode needs), no MCP servers, no repository instructions.
           mkdir -p "$RUNNER_TEMP/empty"
           cd "$RUNNER_TEMP/empty"
-          [ -n "$COPILOT_MODEL" ] || unset COPILOT_MODEL
-          timeout 300 copilot -p "$(cat "$RUNNER_TEMP/triage/prompt.txt")" --silent --no-ask-user --no-custom-instructions \
+          model=()
+          if [ -n "$TRIAGE_MODEL" ]; then
+            [[ "$TRIAGE_MODEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || { echo "::error::TRIAGE_MODEL is not a model id"; exit 1; }
+            model=(--model "$TRIAGE_MODEL")   # one argument, never part of a shell string
+            echo "model: $TRIAGE_MODEL"
+          fi
+          timeout 300 copilot "${model[@]}" -p "$(cat "$RUNNER_TEMP/triage/prompt.txt")" --silent --no-ask-user --no-custom-instructions \
             --no-auto-update --disable-builtin-mcps --disable-client-telemetry \
             --available-tools=view --allow-all-tools --deny-tool=shell --deny-tool=write --deny-tool=url \
             --secret-env-vars=COPILOT_GITHUB_TOKEN > "$RUNNER_TEMP/triage/result.txt"
