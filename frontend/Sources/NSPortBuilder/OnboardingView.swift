@@ -46,16 +46,20 @@ import UniformTypeIdentifiers
         VStack(spacing: 0) {
             navigation
                 .transaction { if reduceMotion { $0.animation = nil; $0.disablesAnimations = true } }
-            ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-                    heading
-                    stepContent
+            // The block sits in the middle of the space between header and footer; when it is taller than that space
+            // it starts at the top and scrolls (the minimum height only ever adds room around a short block).
+            GeometryReader { space in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 28) {
+                        heading
+                        stepContent
+                    }
+                    .frame(maxWidth: 880, alignment: .leading)
+                    .padding(.horizontal, 56).padding(.vertical, 28)
+                    .frame(maxWidth: .infinity, minHeight: space.size.height, alignment: .center)
+                    .id(state.step)
+                    .transition(transition)
                 }
-                .frame(maxWidth: 880, alignment: .leading)
-                .padding(.horizontal, 56).padding(.vertical, 28)
-                .frame(maxWidth: .infinity)
-                .id(state.step)
-                .transition(transition)
             }
             .clipped()
             footer
@@ -165,9 +169,9 @@ import UniformTypeIdentifiers
             requirement("onboarding.require.files", value: t("onboarding.require.filesNote"), okay: nil)
             if case let .requirements(free, needed) = state.welcome {
                 requirement("onboarding.require.disk", value: String(format: t("onboarding.require.diskNote"), free, needed), okay: state.welcome.hasSpace)
-                if !state.welcome.hasSpace {
-                    Text(t("onboarding.require.diskWarning")).foregroundStyle(LauncherPalette.building)
-                }
+                // Always laid out (shown only when short of room) so the centered block does not shift
+                Text(t("onboarding.require.diskWarning")).foregroundStyle(LauncherPalette.building)
+                    .opacity(state.welcome.hasSpace ? 0 : 1).accessibilityHidden(state.welcome.hasSpace)
             }
         }.modifier(OnboardingCard())
     }
