@@ -1,6 +1,6 @@
 """scripts/patches.py on a fixture repository: the series reproduces the vendored tree, a patch that upstream took drops on a bump,
 a conflict names its patch, export writes the header, a patch that touches the shader chain is rejected, and the list of carried
-patches is generated. No game files, no network: upstream is a branch of the fixture."""
+patches is generated, and the generated indexes are regenerated on the patched tree. No game files, no network: upstream is a branch of the fixture."""
 import importlib.util, os, shutil, subprocess, sys, tempfile, unittest
 from pathlib import Path
 
@@ -224,7 +224,7 @@ class ForkPatchList(Fixture):
         self.assertEqual(mod.fork_patches(), '')
         (self.tmp / 'dm/fork_patches.txt').write_text('runtime-profile\nbc-cpu-decode\n')
         self.assertEqual(mod.fork_patches(), 'runtime-profile,bc-cpu-decode')
-        args = type('A', (), dict(name='G', bundle_id=None, title_id='0100000000000000', version=None, category=None, marker=None, lang=None))()
+        args = type('A', (), dict(name='G', bundle_id=None, title_id='0100000000000000', version=None, category=None, marker=None, lang=None, settings=None))()
         self.assertEqual(mod.info_plist(args, '26.0', False)['DMForkPatches'], 'runtime-profile,bc-cpu-decode')
 
     def test_the_first_log_line_and_the_ios_key_are_in_the_sources(self):
@@ -232,6 +232,41 @@ class ForkPatchList(Fixture):
         self.assertIn('"fork patches: %s\\n"', (REPO / 'dm/ios/Sources/main.m').read_text())
         self.assertIn('"fork patches: %s\\n"', (REPO / 'dm/mac/launcher.c').read_text())
         self.assertIn('DMForkPatches: ${DM_FORK_PATCHES}', (REPO / 'dm/ios/project.yml').read_text())
+
+
+class GeneratedIndexes(Fixture):
+    """docs/agents/game-patches.md and symptoms.md are written by upstream's tools from the tree: bump, apply and check regenerate them
+    on the patched tree, and a patch must not carry them."""
+    GEN = ("import pathlib\nr = pathlib.Path(__file__).resolve().parents[2]\n(r / 'docs/agents').mkdir(parents=True, exist_ok=True)\n"
+           "(r / 'docs/agents/%s').write_text('fork=%%d\\n' %% ('fork' in (r / 'dm/a.c').read_text()))\n")
+
+    def with_tools(self):
+        return self.upstream_commit({'dm/tools/docs_patches.py': self.GEN % 'game-patches.md', 'dm/tools/docs_symptoms.py': self.GEN % 'symptoms.md',
+                                     'docs/agents/game-patches.md': 'fork=0\n', 'docs/agents/symptoms.md': 'fork=0\n'}, 'upstream: the index tools')
+
+    def test_bump_writes_the_indexes_from_the_patched_tree(self):
+        sha = self.with_tools()
+        self.run_tool('bump', '--to', sha)
+        for f in ('game-patches.md', 'symptoms.md'): self.assertEqual((self.r / 'docs/agents' / f).read_text(), 'fork=1\n')
+        self.assertIn('ok.', self.run_tool('check'))
+
+    def test_check_fails_on_a_stale_index_and_apply_restores_it(self):
+        self.run_tool('bump', '--to', self.with_tools())
+        (self.r / 'docs/agents/symptoms.md').write_text('stale\n')
+        self.assertIn('docs/agents/symptoms.md', self.run_tool('check', expect=1))
+        self.run_tool('apply')
+        self.run_tool('check')
+
+    def test_a_patch_that_carries_a_generated_file_is_rejected(self):
+        self.run_tool('bump', '--to', self.with_tools())
+        git(self.r, 'add', '-A'); git(self.r, 'commit', '-q', '-m', 'bump')
+        self.w('docs/agents/game-patches.md', 'hand edit\n'); git(self.r, 'add', '-A'); git(self.r, 'commit', '-q', '-m', 'Edit the index by hand')
+        self.assertIn('no change under the vendored paths', self.run_tool('export', 'HEAD'))
+        text = git(self.r, 'format-patch', '--stdout', '-1', 'HEAD').replace('\n---\n', '\nUpstream-Status: fork-only\nReason: r\nIssue: LNPANDY/NX2Apple#1\n---\n', 1)
+        (self.r / 'patches/0002-index.patch').write_text(text + '\n')
+        s = self.r / 'patches/series'; s.write_text(s.read_text() + '0002-index.patch\n')
+        out = self.run_tool('check', expect=1)
+        self.assertIn('0002-index.patch', out); self.assertIn('generated', out)
 
 
 if __name__ == '__main__':

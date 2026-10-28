@@ -15,10 +15,10 @@ Issue: LNPANDY/NX2Apple#123
  dm/ios/Sources/DmIOS-Bridging-Header.h |   3 +
  dm/ios/Sources/Launcher.swift          |  88 ++++++++++++++++++++
  dm/ios/Sources/front_ios.m             |  13 ++-
- dm/ios/Sources/main.m                  | 108 ++++++++++++++++++++++---
+ dm/ios/Sources/main.m                  | 109 +++++++++++++++++++++++--
  dm/ios/project.yml                     |   1 +
  dm/ios/tests/test_romfs_startup.py     |  41 +++++++++-
- 8 files changed, 353 insertions(+), 12 deletions(-)
+ 8 files changed, 354 insertions(+), 12 deletions(-)
  create mode 100644 dm/ios/Sources/DataBookmark.h
  create mode 100644 dm/ios/Sources/DataBookmark.m
  create mode 100644 dm/ios/Sources/DmIOS-Bridging-Header.h
@@ -156,12 +156,12 @@ index 00000000..92a2b3a5
 +// DataBookmark.h). project.yml points SWIFT_OBJC_BRIDGING_HEADER here.
 +#import "DataBookmark.h"
 diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
-index 3c72edea..1e21e9c9 100644
+index dc63e4e3..df41a708 100644
 --- a/dm/ios/Sources/Launcher.swift
 +++ b/dm/ios/Sources/Launcher.swift
-@@ -64,6 +64,93 @@ private struct SettingRow: View {
-     }
- }
+@@ -8,6 +8,93 @@ import os
+ 
+ private func info(_ key: String) -> Any? { Bundle.main.object(forInfoDictionaryKey: key) }
  
 +/// Where this game's data comes from, and a picker to change it.
 +///
@@ -253,7 +253,7 @@ index 3c72edea..1e21e9c9 100644
  private struct LauncherView: View {
      @ObservedObject var m: LauncherModel
      let play: () -> Void
-@@ -98,6 +185,7 @@ private struct LauncherView: View {
+@@ -45,6 +132,7 @@ private struct LauncherView: View {
                      } footer: {
                          Text("Brings back all settings this game was tested with.")
                      }
@@ -262,18 +262,18 @@ index 3c72edea..1e21e9c9 100644
                          HStack {
                              Text("Memory available")
 diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
-index 9cd03bad..fef3aa8a 100644
+index 45aa526b..56a432f1 100644
 --- a/dm/ios/Sources/front_ios.m
 +++ b/dm/ios/Sources/front_ios.m
-@@ -15,6 +15,7 @@
- void front_ios_boot(void);
+@@ -16,6 +16,7 @@
  int front_ios_boot_ok(void);
+ const char *front_ios_boot_message(void);   // main.m: why a build that keeps the game files off the IPA found none usable (NULL = the generic hint)
  bool dm_show_launcher(void *view_controller, void (*done)(void));   // Launcher.swift: false = no launcher (no dm/launcher.json, or DM_LAUNCHER=0)
 +int dm_locate_game_data(void);   // main.m: (re)decide where the game data is; NO when there still is none
  
  static CAMetalLayer *g_layer;
  static void front_ios_power_watch(void);
-@@ -46,6 +47,7 @@ @interface DmRootVC : UIViewController
+@@ -47,6 +48,7 @@ @interface DmRootVC : UIViewController
  @property (nonatomic, strong) UIView *pad;
  @property (nonatomic, strong) UILabel *fps;
  @property (nonatomic) BOOL launched;
@@ -281,7 +281,7 @@ index 9cd03bad..fef3aa8a 100644
  - (void)startGame;
  @end
  static DmRootVC *g_root;
-@@ -67,6 +69,14 @@ - (void)viewDidLoad {
+@@ -69,6 +71,14 @@ - (void)viewDidLoad {
  // The game view, the pad and the frame-rate counter are made once the launcher has set the switches they read (DM_SHOW_FPS, DM_METAL_HUD); the host's loading began at app launch (main.m)
  - (void)startGame {
      if (self.game) return;
@@ -296,8 +296,8 @@ index 9cd03bad..fef3aa8a 100644
      front_hud_env();   // before the game view makes its device (an env file's DM_METAL_HUD sets it in main.m already)
      self.game = [[DmGameView alloc] initWithFrame:self.view.bounds];
      [self.view addSubview:self.game];
-@@ -97,7 +107,8 @@ - (void)viewDidAppear:(BOOL)a {
-     [super viewDidAppear:a];
+@@ -104,7 +114,8 @@ - (void)viewDidAppear:(BOOL)a {
+     }
      if (self.launched || !front_ios_boot_ok()) return;
      self.launched = YES; g_root = self;
 -    if (!dm_show_launcher((__bridge void *)self, launcher_done)) [self startGame];   // the settings screen first (Launcher.swift), when the app has one
@@ -307,11 +307,11 @@ index 9cd03bad..fef3aa8a 100644
  - (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
  - (UIRectEdge)preferredScreenEdgesDeferringSystemGestures { return UIRectEdgeAll; }   // Edge gestures need two swipes, to avoid accidental exits
 diff --git a/dm/ios/Sources/main.m b/dm/ios/Sources/main.m
-index eb0f56a3..b546e1bf 100644
+index fb37046e..5afddbb6 100644
 --- a/dm/ios/Sources/main.m
 +++ b/dm/ios/Sources/main.m
-@@ -6,9 +6,10 @@
- #include <stdio.h>
+@@ -7,9 +7,10 @@
+ #include <string.h>
  #include <sys/stat.h>
  #include <unistd.h>
 -#include "game_profile.h"   // game profile constants (the RomFS marker path)
@@ -319,12 +319,12 @@ index eb0f56a3..b546e1bf 100644
  #include "front.h"
  #include "romfs_image.h"
 +#include "DataBookmark.h"
- 
- int dm_main(int argc, char **argv);   // dm/host/main.c compiled in with -Dmain=dm_main
- UIViewController *front_ios_root(void);
-@@ -25,9 +26,59 @@ static int romfs_image_complete(NSString *path) {
-     }
-     romfs_image_close(m); return 1;
+ #include "romfs_identity.h"
+ #include "player_env.h"
+ #ifndef DM_PLAYER_BUILD
+@@ -40,9 +41,59 @@ static int romfs_identity_accepts(NSString *img) {
+     if (rc != ROMFS_ID_OK && rc != ROMFS_ID_NONE) fprintf(stderr, "[RED] boot: Documents/romfs.img is not the image this build needs (verdict %d); not used\n", rc);
+     return rc == ROMFS_ID_OK || rc == ROMFS_ID_NONE;
  }
 +// A folder holds this game's files if it has a ROMFSARC index or the profile's marker path.
 +// Shared by romfs_locate and the per-game layout below, so both answer the same question.
@@ -380,9 +380,9 @@ index eb0f56a3..b546e1bf 100644
 +    NSString *gfolder = [gdir stringByAppendingPathComponent:@"romfs"];
 +    if ([fm fileExistsAtPath:gfolder] && romfs_dir_ok(gfolder)) return gfolder;
      NSString *img = [doc stringByAppendingPathComponent:@"romfs.img"];
-     if (romfs_image_complete(img)) {
+     if (romfs_image_complete(img) && romfs_identity_accepts(img)) {
          // A folder copy from before images is now dead weight of up to many GB (often cut off partway). Deleting its 300,000 files here took longer than iOS allows an app to start
-@@ -43,13 +94,48 @@ static int romfs_image_complete(NSString *path) {
+@@ -58,13 +109,48 @@ static int romfs_identity_accepts(NSString *img) {
      }
      NSString *bundledImage = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"romfs.img"];
      NSString *documentFolder = [doc stringByAppendingPathComponent:@"romfs"];
@@ -431,9 +431,9 @@ index eb0f56a3..b546e1bf 100644
 +int dm_locate_game_data(void) { return set_data_env(romfs_locate(), YES); }
 +
  // Boot prerequisites (done before UIApplicationMain): directories / environment variables / log -- the host's early load reads these
- static int boot_env(void) {
-     NSFileManager *fm = NSFileManager.defaultManager;
-@@ -83,15 +169,19 @@ static int boot_env(void) {
+ // Why a slim build found no usable game files: the verdict on Documents/romfs.img, in the log and for the screen (front_ios_boot_message). NULL when the build has no romfs.id
+ static char g_boot_message[640];
+@@ -127,15 +213,20 @@ static int boot_env(void) {
      NSString *lang = [NSBundle.mainBundle objectForInfoDictionaryKey:@"DMLanguage"];
      if (!getenv("DM_LANG") && [lang isKindOfClass:NSString.class] && lang.length) setenv("DM_LANG", lang.UTF8String, 0);
      fprintf(stderr, "boot: game language %s\n", getenv("DM_LANG") ?: "en-US");
@@ -441,13 +441,14 @@ index eb0f56a3..b546e1bf 100644
 +    // is where a location gets picked; dm_locate_game_data() looks again when Play is pressed.
 +    NSString *gdir = game_dir_for(dm_profile()->id);
      NSString *romfs = romfs_locate();
--    if (!romfs) { fprintf(stderr, "boot: game files not found (Documents/romfs.img, Documents/romfs or <App>/romfs)\n"); return 0; }
+-    if (!romfs) { romfs_identity_report(doc); fprintf(stderr, "boot: game files not found (Documents/romfs.img, Documents/romfs or <App>/romfs)\n"); return 0; }
 -    fprintf(stderr, "boot: game files %s\n", romfs.fileSystemRepresentation);
 -    setenv("DM_ROMFS", romfs.fileSystemRepresentation, 0);
 -    setenv("DM_SAVE", [doc stringByAppendingPathComponent:@"save"].fileSystemRepresentation, 0);
 -    setenv("DM_TEMP", [doc stringByAppendingPathComponent:@"temp"].fileSystemRepresentation, 0);
 +    BOOL per_game = [romfs hasPrefix:gdir];   // messaging nil is NO here: no data means the shared layout
-+    if (!set_data_env(romfs, NO)) fprintf(stderr, "boot: no game data yet (Documents/romfs.img, Documents/romfs or <App>/romfs); the launcher asks for it\n");
++    if (!set_data_env(romfs, NO)) { if (!romfs) romfs_identity_report(doc);   // a slim build says why its romfs.img was not used
++        fprintf(stderr, "boot: no game data yet (Documents/romfs.img, Documents/romfs or <App>/romfs); the launcher asks for it\n"); }
      NSString *dm = [res stringByAppendingPathComponent:@"dm"];
      setenv("DM_NVN_SHMAP", [dm stringByAppendingPathComponent:@"shader_map.tsv"].fileSystemRepresentation, 0);
 -    setenv("DM_MSL_DIR", [res stringByAppendingPathComponent:@"msl"].fileSystemRepresentation, 0);
@@ -472,12 +473,12 @@ index 4a1e3b65..298b2eed 100644
        GCC_WARN_INHIBIT_ALL_WARNINGS: YES
  schemes:
 diff --git a/dm/ios/tests/test_romfs_startup.py b/dm/ios/tests/test_romfs_startup.py
-index 89e4f220..271744e3 100644
+index b31ad6ed..82d0ff92 100644
 --- a/dm/ios/tests/test_romfs_startup.py
 +++ b/dm/ios/tests/test_romfs_startup.py
-@@ -23,12 +23,19 @@ class Startup(unittest.TestCase):
+@@ -24,12 +24,19 @@ class Startup(unittest.TestCase):
          source = root / 'locator.m'
-         source.write_text('#import <Foundation/Foundation.h>\n#include <stdio.h>\n#include "romfs_image.h"\n'
+         source.write_text('#import <Foundation/Foundation.h>\n#include <stdio.h>\n#include "romfs_image.h"\n#include "romfs_identity.h"\n'
                            'static NSString *fixture_doc, *fixture_tmp, *fixture_bundle;\n#define DM_GAME_ROMFS_MARKER "marker"\n'
 +                          'typedef struct { const char *id, *romfs_marker; } fixture_profile;   /* the fork reads both from the runtime profile */\nstatic const fixture_profile *dm_profile(void) { static const fixture_profile p = {"0100000000000000", "marker"}; return &p; }\n'
                            '@interface FixtureBundle : NSObject\n+ (instancetype)mainBundle;\n- (NSString *)resourcePath;\n@end\n'
@@ -497,9 +498,9 @@ index 89e4f220..271744e3 100644
                            'if (!p) return 1; puts(p.fileSystemRepresentation); return 0; }}\n')
          cls.locator = root / 'locator'
          subprocess.run(['clang', '-fobjc-arc', '-Wall', '-Werror', '-I', str(REPO / 'dm/host'),
-@@ -65,5 +72,35 @@ class Startup(unittest.TestCase):
-             self.assertEqual(locate(), str(folder))
-             image.pack(source, doc / 'romfs.img'); self.assertEqual(locate(), str(doc / 'romfs.img'))
+@@ -92,5 +99,35 @@ class Startup(unittest.TestCase):
+             shutil.copy(root / 'other.img', doc / 'romfs.img')
+             self.assertEqual(locate().stdout.strip(), str(doc / 'romfs.img'))
  
 +    def test_the_location_the_player_picked_wins_over_everything(self):
 +        """The Files-app pick (DataBookmark): an image, a folder holding one, or a plain tree."""

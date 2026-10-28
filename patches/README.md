@@ -93,3 +93,13 @@ Upstream's compatibility is the baseline. A patch does not change it silently.
 `.github/`, `frontend/`, `frontend-qt/`, the README, CONTRIBUTING.md, CLAUDE.md and everything else outside the five vendored paths
 belong to the fork and are edited directly. Inside the vendored paths, the tool's own files (`scripts/patches.py`,
 `scripts/tests/test_patches.py`) and the generated `dm/fork_patches.txt` are not part of the generated tree.
+
+## Generated files inside the vendored paths
+
+`docs/agents/game-patches.md` and `docs/agents/symptoms.md` are written by upstream's own tools (`dm/tools/docs_patches.py`,
+`dm/tools/docs_symptoms.py`) from the tree, and upstream's `test_docs.py` requires them to equal that output. With the series in,
+the tree differs from upstream's (a profile key, a patched host table), so upstream's copy would fail the test, and a patch that
+carried the file would conflict on every bump. `apply`, `bump` and `check` therefore run both tools on the patched tree and
+compare the result, and a patch that touches either file is rejected by `check` (`export` leaves them out). Nothing to do by hand:
+`apply` writes them. Not covered: `docs/badges/*.json`, which are carried as static files in `fork-docs`; the README's game table and
+banners are outside the vendored paths and no longer refreshed by a script.

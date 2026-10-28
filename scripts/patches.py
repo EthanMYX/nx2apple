@@ -10,8 +10,8 @@ in .upstream-ref, plus the patches in patches/ applied in the order of patches/s
     Issue: <repo>#<n>
 
 Subcommands (Python 3.9+, stdlib and git):
-  apply [--ref SHA]     build the vendored tree from upstream at the ref plus the series (a temporary worktree), copy it
-                        into the checkout, and write dm/fork_patches.txt
+  apply [--ref SHA]     build the vendored tree from upstream at the ref plus the series (a temporary worktree), regenerate
+                        the generated indexes (GENERATED), copy it into the checkout, and write dm/fork_patches.txt
   bump --to SHA         move the pin: re-apply the series on SHA, drop the patches that come out empty (upstream has them)
                         and report them, refresh the rest; on a conflict stop, naming the patch, its Reason and its
                         Upstream-Status, and leave the conflict in a worktree for a human. --dry changes nothing and
@@ -19,7 +19,8 @@ Subcommands (Python 3.9+, stdlib and git):
   export <commit|range> turn local commits on the vendored tree into patches with the header template
   status                a table of the patches: Upstream-Status, Reason, age
   check                 the headers are valid, no patch touches the shader chain, the series applies to the pinned ref and
-                        reproduces the vendored tree of the checkout byte for byte
+                        reproduces the vendored tree of the checkout byte for byte (after
+                        the generated indexes are regenerated on it)
 
 Scratch worktrees go under $PATCHES_TMP (or --tmp), else the system temporary folder.
 """
@@ -31,6 +32,12 @@ VENDORED = ('dm', 'scripts', 'docs', 'AGENTS.md', 'ref')
 # Inside the vendored paths but not part of the generated tree: the tool, its test, and the list it writes.
 OWN = ('scripts/patches.py', 'scripts/tests/test_patches.py', 'dm/fork_patches.txt')
 FORK_PATCHES = 'dm/fork_patches.txt'
+# Generated files inside the vendored paths: upstream's tests require each to equal what its tool writes from the tree
+# (test_docs.py), and the tree differs from upstream's once the series is in, so a patch cannot carry them (they would
+# conflict on every bump). apply, bump and check run the tools on the patched tree and commit the result; export and check
+# keep patches away from these paths.
+GENERATED = (('docs/agents/game-patches.md', 'dm/tools/docs_patches.py'),
+             ('docs/agents/symptoms.md', 'dm/tools/docs_symptoms.py'))
 KINDS = ('forwarded', 'pending', 'fork-only', 'backport')
 # The shader chain and the tool pins (AGENTS.md: the DMSH_CHAIN paragraph names them; chain_paths() reads it).
 # Used only when AGENTS.md has no such paragraph.
@@ -195,6 +202,19 @@ def apply_series(wt, patches, stop=True):
     return applied, landed, conflicts
 
 
+def generate(wt):
+    """Run the generators of GENERATED on the patched tree and commit what they changed (no commit when nothing changed)."""
+    for out, tool in GENERATED:
+        if not (wt / tool).is_file(): continue
+        r = subprocess.run([sys.executable, str(wt / tool)], cwd=wt, capture_output=True, text=True)
+        if r.returncode:
+            raise Fail(f'{tool} failed on the patched tree: {(r.stderr.strip().splitlines() or [str(r.returncode)])[-1]}')
+    if git('status', '--porcelain', '--', *(o for o, _ in GENERATED), cwd=wt).stdout.strip():
+        git('add', '--', *(o for o, _ in GENERATED), cwd=wt)
+        git('-c', 'user.name=patches.py', '-c', 'user.email=patches@localhost', '-c', 'commit.gpgsign=false',
+            'commit', '-q', '-m', 'Regenerated indexes: ' + ', '.join(o for o, _ in GENERATED), cwd=wt)
+
+
 def tree_files(wt):
     """{path: (mode, blob)} of the vendored paths at HEAD of a worktree, without the tool's own files."""
     out = git('ls-tree', '-r', '-z', 'HEAD', '--', *VENDORED, cwd=wt).stdout
@@ -260,6 +280,8 @@ def cmd_check(a):
     if stray: bad.append('patch files not in patches/series: ' + ', '.join(stray))
     for p in patches:
         for m in p.problems(): bad.append(f'{p.file}: {m}')
+        gen = sorted(f for f in p.files if f in {o for o, _ in GENERATED})
+        if gen: bad.append(f'{p.file}: touches generated files ({", ".join(gen)}); apply, bump and check regenerate them, so a patch must not carry them')
         hits = chain_hits(p.files, root)
         if hits: bad.append(f'{p.file}: touches the shader chain or the tool pins, which patches must not change ({", ".join(hits)}); see patches/README.md, Patch policy')
     if bad:
@@ -273,6 +295,7 @@ def cmd_check(a):
             say(f'patch queue: {p.file} does not apply to the pinned upstream {sha[:12]}\n  Reason: {p.reason}\n  Upstream-Status: {p.status}\n  {msg}'); return 1
         if landed:
             say('patch queue: patches that are empty on the pinned upstream (it has them already; run bump to drop them): ' + ', '.join(p.file for p in landed)); return 1
+        generate(s.dir)
         want = tree_files(s.dir)
     diff = diff_trees(want, local_files(root))
     expect = fork_patch_list(patches)
@@ -297,6 +320,7 @@ def cmd_apply(a):
         if conflicts:
             p, msg = conflicts[0]
             raise Fail(f'{p.file} does not apply to {sha[:12]}\n  Reason: {p.reason}\n  Upstream-Status: {p.status}\n  {msg}')
+        generate(s.dir)
         install(root, s.dir, [p for p, _ in applied])
     if landed: say('empty at this ref (upstream has them): ' + ', '.join(p.file for p in landed) + ' (patches.py bump drops them)')
     say(f'applied {len(applied)} patches to upstream {sha[:12]}; the vendored tree is written')
@@ -325,6 +349,7 @@ def cmd_bump(a):
             return 0
         write_series(root, s.dir, applied, landed, patches)
         (root / '.upstream-ref').write_text(sha + '\n')
+        generate(s.dir)
         install(root, s.dir, [p for p, _ in applied])
         s.close()
         return 0
@@ -374,6 +399,7 @@ def cmd_refresh(a):
     say('landed upstream, dropped: ' + (', '.join(p.name for p in landed) or 'none'))
     write_series(root, wt, applied, landed, old)
     (root / '.upstream-ref').write_text(sha + '\n')
+    generate(wt)
     install(root, wt, [p for p, _ in applied])
     return 0
 
@@ -395,7 +421,7 @@ def cmd_export(a):
     made = []
     for c in commits:
         text = git('format-patch', '--binary', '--zero-commit', '--no-signature', '--no-numbered', '--stdout', f'{c}^..{c}', '--', *VENDORED,
-                   *(f':(exclude){o}' for o in OWN), cwd=root, binary=True).stdout.decode(errors='surrogateescape')
+                   *(f':(exclude){o}' for o in (*OWN, *(g for g, _ in GENERATED))), cwd=root, binary=True).stdout.decode(errors='surrogateescape')
         if not re.search(r'(?m)^diff --git ', text):
             say(f'skipped {c[:10]}: no change under the vendored paths'); continue
         files = sorted({f for m in re.finditer(r'(?m)^diff --git a/(\S+) b/(\S+)$', text) for f in m.groups()})
